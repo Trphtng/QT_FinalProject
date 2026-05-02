@@ -64,6 +64,7 @@ class PortfolioEnv:
         risk_free_rate: float = 0.0,
         rebalance_frequency: int = 1,
         rebalance_alpha: float = 1.0,
+        include_prev_weights: bool = True,
         start_index: int | None = None,
         end_index: int | None = None,
     ) -> None:
@@ -93,6 +94,7 @@ class PortfolioEnv:
         self.risk_free_rate = risk_free_rate
         self.rebalance_frequency = max(1, int(rebalance_frequency))
         self.rebalance_alpha = float(np.clip(rebalance_alpha, 0.0, 1.0))
+        self.include_prev_weights = bool(include_prev_weights)
 
         self.start_index = max(lookback_window, start_index or lookback_window)
         self.end_index = min(len(dates) - 1, end_index or (len(dates) - 1))
@@ -105,7 +107,7 @@ class PortfolioEnv:
         self.current_weights = np.zeros(self.action_dim, dtype=np.float32)
         self.prev_weights = self.current_weights.copy()
         self.current_weights[-1] = 1.0
-        self.portfolio_state_dim = self.action_dim * 2
+        self.portfolio_state_dim = self.action_dim * 2 if self.include_prev_weights else self.action_dim
         self.recent_net_returns: deque[float] = deque(maxlen=self.sharpe_window)
         self.turnover_history: list[float] = []
         self.weight_history: list[np.ndarray] = []
@@ -277,10 +279,10 @@ class PortfolioEnv:
         start = self.current_step - self.lookback_window
         end = self.current_step
         market_window = self.features[start:end]
-        portfolio_state = np.concatenate(
-            [self.current_weights, self.prev_weights],
-            axis=0,
-        )
+        if self.include_prev_weights:
+            portfolio_state = np.concatenate([self.current_weights, self.prev_weights], axis=0)
+        else:
+            portfolio_state = self.current_weights.copy()
         return {
             "market": market_window.astype(np.float32),
             "portfolio": portfolio_state.astype(np.float32),

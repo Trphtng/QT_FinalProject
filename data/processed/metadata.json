@@ -2114,6 +2114,8 @@
     "Close",
     "Volume",
     "Return",
+    "Return5",
+    "Return20",
     "LogReturn",
     "ATR14",
     "RSI14",

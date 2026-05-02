@@ -1,16 +1,16 @@
 {
   "PPO Actor-Critic": {
-    "Total Return %": 24.224485770198,
-    "CAGR": 0.1901611906718439,
-    "Sharpe Ratio": 1.0294111147325278,
-    "Sortino Ratio": 1.7917956846463905,
-    "Max Drawdown": -0.15865854883396957,
-    "Volatility": 0.18579664714957425,
-    "Calmar Ratio": 1.198556220697825,
+    "Total Return %": 23.26907610767579,
+    "CAGR": 0.18280945726392317,
+    "Sharpe Ratio": 0.967259204808778,
+    "Sortino Ratio": 1.6713167423215125,
+    "Max Drawdown": -0.17280085640978426,
+    "Volatility": 0.19264404933808305,
+    "Calmar Ratio": 1.0579198567766601,
     "Win Rate": 0.535031847133758,
-    "Final Portfolio Value": 1242244.85770198,
-    "Turnover": 0.0063044175766645725,
-    "Avg Holding Period": 158.61868400978742
+    "Final Portfolio Value": 1232690.761076758,
+    "Turnover": 0.006551518751557466,
+    "Avg Holding Period": 152.6361297763954
   },
   "BuyHold EqualWeight": {
     "Total Return %": 24.36614447244945,

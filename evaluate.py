@@ -31,6 +31,32 @@ from train import get_device, load_config
 
 LOGGER = get_logger(__name__)
 
+LEGACY_FEATURE_NAMES = [
+    "Open",
+    "High",
+    "Low",
+    "Close",
+    "Volume",
+    "Return",
+    "LogReturn",
+    "ATR14",
+    "RSI14",
+    "MACD",
+    "MACDSignal",
+    "MACDHist",
+    "BBUpper",
+    "BBMiddle",
+    "BBLower",
+    "SMA10",
+    "SMA20",
+    "EMA20",
+    "Volatility20",
+    "RealizedVol20",
+    "Momentum20",
+    "RollingCorrMarket20",
+    "DrawdownLocalPeak",
+]
+
 
 def build_env(bundle, split, cfg) -> PortfolioEnv:
     return PortfolioEnv(
@@ -50,20 +76,66 @@ def build_env(bundle, split, cfg) -> PortfolioEnv:
         drawdown_penalty_threshold=float(cfg["environment"].get("drawdown_penalty_threshold", 0.08)),
         drawdown_penalty_power=float(cfg["environment"].get("drawdown_penalty_power", 1.5)),
         lambda_return_bonus=float(cfg["environment"].get("lambda_return_bonus", 0.0)),
+        lambda_sharpe_bonus=float(cfg["environment"].get("lambda_sharpe_bonus", 0.0)),
+        sharpe_window=int(cfg["environment"].get("sharpe_window", 20)),
+        lambda_momentum_bonus=float(cfg["environment"].get("lambda_momentum_bonus", 0.0)),
+        momentum_window=int(cfg["environment"].get("momentum_window", 20)),
+        momentum_scale=float(cfg["environment"].get("momentum_scale", 50.0)),
         return_target=float(cfg["environment"].get("return_target", 0.0)),
         reward_mode=str(cfg["environment"]["reward_mode"]),
         risk_free_rate=float(cfg["environment"]["risk_free_rate"]),
         rebalance_frequency=int(cfg["environment"].get("rebalance_frequency", cfg["environment"].get("rebalance_every", 1))),
         rebalance_alpha=float(cfg["environment"].get("rebalance_alpha", 1.0)),
+        include_prev_weights=bool(cfg["environment"].get("include_prev_weights", True)),
         start_index=int(split[0]),
         end_index=int(split[1]),
+    )
+
+
+def _infer_checkpoint_dims(checkpoint: dict, n_assets: int) -> tuple[int, int]:
+    model_state = checkpoint["model_state_dict"]
+    market_in = int(model_state["encoder.input_proj.weight"].shape[1])
+    portfolio_dim = int(model_state["portfolio_proj.0.weight"].shape[1])
+    if market_in % n_assets != 0:
+        raise RuntimeError(f"Checkpoint market input dim {market_in} is not divisible by n_assets={n_assets}")
+    expected_n_features = market_in // n_assets
+    return expected_n_features, portfolio_dim
+
+
+def _adapt_bundle_features(bundle: DataBundle, expected_n_features: int) -> DataBundle:
+    if len(bundle.feature_names) == expected_n_features:
+        return bundle
+    if expected_n_features == len(LEGACY_FEATURE_NAMES):
+        name_to_idx = {name: idx for idx, name in enumerate(bundle.feature_names)}
+        if all(name in name_to_idx for name in LEGACY_FEATURE_NAMES):
+            indices = [name_to_idx[name] for name in LEGACY_FEATURE_NAMES]
+            return DataBundle(
+                dates=bundle.dates,
+                tickers=bundle.tickers,
+                feature_names=LEGACY_FEATURE_NAMES.copy(),
+                features=bundle.features[:, :, indices],
+                returns=bundle.returns,
+                covariances=bundle.covariances,
+                prices=bundle.prices,
+                market_regime=bundle.market_regime,
+            )
+    raise RuntimeError(
+        f"Feature mismatch: bundle has {len(bundle.feature_names)} features but checkpoint expects {expected_n_features}. "
+        "Please retrain with current config or provide a matching processed dataset/checkpoint pair."
     )
 
 
 def main() -> None:
     cfg = load_config()
     device = get_device(cfg["training"])
+    checkpoint = torch.load(cfg["training"]["checkpoint_path"], map_location=device)
     bundle = DataBundle.load(cfg["data"]["processed_dir"])
+    expected_n_features, expected_portfolio_dim = _infer_checkpoint_dims(checkpoint, len(bundle.tickers))
+    bundle = _adapt_bundle_features(bundle, expected_n_features)
+    include_prev_weights = expected_portfolio_dim > (len(bundle.tickers) + 1)
+    cfg = dict(cfg)
+    cfg["environment"] = dict(cfg["environment"])
+    cfg["environment"]["include_prev_weights"] = include_prev_weights
     splits = time_series_split(
         n_steps=len(bundle.dates),
         train_ratio=float(cfg["data"]["train_ratio"]),
@@ -75,11 +147,10 @@ def main() -> None:
     model = ActorCriticNetwork(
         n_assets=len(bundle.tickers),
         n_features=len(bundle.feature_names),
-        portfolio_dim=test_env.portfolio_state_dim,
+        portfolio_dim=expected_portfolio_dim,
         model_cfg=cfg["model"],
     )
-    checkpoint = torch.load(cfg["training"]["checkpoint_path"], map_location=device)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model.load_state_dict(checkpoint["model_state_dict"], strict=True)
     model.to(device)
     model.eval()
 
