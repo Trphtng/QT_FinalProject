@@ -1,0 +1,134 @@
+project:
+  name: drl_portfolio_management
+  seed: 42
+  output_dir: outputs
+
+data:
+  tickers:
+    - AAPL
+    - MSFT
+    - GOOGL
+    - AMZN
+    - TSLA
+    - META
+    - NVDA
+    - JPM
+    - XOM
+    - NFLX
+  start_date: "2018-01-01"
+  end_date: null
+  interval: "1d"
+  lookback_window: 30
+  min_history: 120
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  max_retries: 3
+  retry_delay_seconds: 2
+  use_cache: true
+  train_ratio: 0.70
+  val_ratio: 0.15
+  test_ratio: 0.15
+  walk_forward:
+    enabled: true
+    train_window: 756
+    val_window: 126
+    test_window: 126
+    step_size: 63
+
+features:
+  price_column: "Close"
+  include_columns:
+    - Open
+    - High
+    - Low
+    - Close
+    - Volume
+    - Return
+    - Return5
+    - Return20
+    - LogReturn
+    - ATR14
+    - RSI14
+    - MACD
+    - MACDSignal
+    - MACDHist
+    - BBUpper
+    - BBMiddle
+    - BBLower
+    - SMA10
+    - SMA20
+    - EMA20
+    - Volatility20
+    - RealizedVol20
+    - Momentum20
+    - RollingCorrMarket20
+    - DrawdownLocalPeak
+  normalize_features: true
+  covariance_window: 20
+  market_regime:
+    enabled: true
+    ma_fast: 20
+    ma_slow: 100
+
+environment:
+  initial_cash: 1000000.0
+  fee_rate: 0.001
+  slippage_rate: 0.0005
+  kappa: 1.0
+  lambda_var: 0.1
+  lambda_turnover: 0.015
+  lambda_drawdown: 0.04
+  drawdown_penalty_threshold: 0.08
+  drawdown_penalty_power: 1.5
+  lambda_return_bonus: 0.6
+  lambda_sharpe_bonus: 0.15
+  sharpe_window: 20
+  lambda_momentum_bonus: 0.10
+  momentum_window: 20
+  momentum_scale: 50.0
+  return_target: 0.0
+  reward_mode: "log_return"
+  rebalance_frequency: 5
+  rebalance_alpha: 0.25
+  risk_free_rate: 0.0
+  action_mode: "weights"
+
+model:
+  encoder_type: "transformer"
+  hidden_dim: 128
+  num_layers: 2
+  dropout: 0.1
+  cnn_channels: 64
+  lstm_layers: 2
+  transformer_heads: 4
+  transformer_ff_dim: 256
+
+training:
+  device: "auto"
+  use_mixed_precision: true
+  total_epochs: 80
+  rollout_epochs: 1
+  ppo_epochs: 12
+  minibatch_size: 256
+  gamma: 0.997
+  gae_lambda: 0.97
+  clip_epsilon: 0.12
+  value_loss_coef: 0.5
+  entropy_coef_start: 0.01
+  entropy_coef_end: 0.003
+  learning_rate: 0.0001
+  weight_decay: 0.00001
+  max_grad_norm: 0.5
+  lr_scheduler_patience: 12
+  lr_scheduler_factor: 0.5
+  early_stopping_patience: 30
+  checkpoint_path: "outputs/models/best_model.pt"
+  resume_from: null
+  tensorboard_dir: "outputs/tensorboard"
+  log_interval: 1
+
+evaluation:
+  benchmark_rebalance_every: 21
+  rolling_sharpe_window: 63
+  report_path: "outputs/reports/metrics_summary.json"
+  comparison_csv: "outputs/reports/baseline_comparison.csv"
