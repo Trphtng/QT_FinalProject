@@ -1,0 +1,20 @@
+# Data
+data/
+datasets/
+*.csv
+*.xlsx
+*.parquet
+
+# Model
+models/
+*.pth
+*.pt
+*.pkl
+
+# Env
+venv/
+.env
+
+# Python cache
+__pycache__/
+*.pyc
