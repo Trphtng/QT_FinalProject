@@ -1,6 +1,6 @@
 # Deep Reinforcement Learning Portfolio Management
 
-Production-ready project for multi-asset portfolio management with a PPO-style Actor-Critic architecture in PyTorch. The system downloads real market data from Yahoo Finance, engineers technical indicators, trains a portfolio policy over historical data, and compares the learned strategy against strong baselines.
+Production-ready project for multi-asset portfolio management with a PPO-style Actor-Critic architecture in PyTorch. The system downloads real market data from Yahoo Finance or Vietnam market data via Vnstock, engineers technical indicators, trains a portfolio policy over historical data, and compares the learned strategy against strong baselines.
 
 ## 1. Project Overview
 
@@ -114,20 +114,31 @@ Create a virtual environment, then install dependencies:
 pip install -r requirements.txt
 ```
 
+Supported market data providers:
+
+- `yahoo`: US/global equities and ETFs through Yahoo Finance
+- `vnstock`: Vietnam equities, ETFs, and indices through Vnstock
+
 ## 5. How To Train
 
 ```bash
 python train.py
 ```
 
+Train with the bundled Vietnam configuration:
+
+```bash
+python train.py --config configs/config_vn30.yaml
+```
+
 Training pipeline:
 
-1. Download or load cached Yahoo Finance data
+1. Download or load cached market data from the configured provider
 2. Build technical indicators and covariance matrices
 3. Split time series into train/validation/test
 4. Train PPO-style Actor-Critic
 5. Save checkpoints and TensorBoard logs
-6. Save processed dataset to `data/processed/`
+6. Save processed dataset to the configured `processed_dir`
 
 ### TensorBoard
 
@@ -150,6 +161,19 @@ Tracked logs:
 python evaluate.py
 ```
 
+Evaluate the Vietnam experiment:
+
+```bash
+python evaluate.py --config configs/config_vn30.yaml
+```
+
+Evaluate only the PPO model without baseline comparisons:
+
+```bash
+python evaluate.py --config configs/config.yaml --rl-only
+python evaluate.py --config configs/config_vn30.yaml --rl-only
+```
+
 Evaluation will:
 
 - Load the saved processed dataset
@@ -161,12 +185,19 @@ Evaluation will:
   - Random Allocation
 - Save reports and figures
 
+With `--rl-only`, evaluation will:
+
+- Load the trained PPO model
+- Backtest only that model on the test split
+- Save PPO metrics and PPO-only charts without benchmark comparison tables
+
 ## 7. Default Tickers
 
 Configured in `configs/config.yaml`:
 
 ```yaml
 data:
+  provider: "yahoo"
   tickers:
     - AAPL
     - MSFT
@@ -182,7 +213,42 @@ data:
 
 You can replace or extend this list with any Yahoo Finance tickers.
 
-## 8. Switching Encoder Type
+## 8. Vietnam Dataset Support
+
+The repository now includes a Vietnam-market configuration at `configs/config_vn30.yaml`.
+
+Default VN sample basket:
+
+```yaml
+data:
+  provider: "vnstock"
+  vn_source: "VCI"
+  tickers:
+    - FPT
+    - VCB
+    - HPG
+    - MBB
+    - ACB
+    - SSI
+    - MWG
+    - VNM
+    - TCB
+    - VPB
+```
+
+Notes:
+
+- `vn_source` defaults to `VCI`, which is the richer local data source in the Vnstock docs.
+- You can swap in other Vietnam tickers, ETFs such as `E1VFVN30`, or indices such as `VNINDEX` and `VN30`.
+- The VN config uses separate cache and processed directories: `data/raw_vn30/` and `data/processed_vn30/`.
+
+To build a different Vietnam dataset, copy `configs/config_vn30.yaml` and edit only:
+
+- `data.tickers`
+- `data.start_date` / `data.end_date`
+- output paths under `data`, `training`, and `evaluation`
+
+## 9. Switching Encoder Type
 
 Update:
 
@@ -197,18 +263,18 @@ Supported values:
 - `cnn`
 - `transformer`
 
-## 9. Config Highlights
+## 10. Config Highlights
 
 Important sections in `configs/config.yaml`:
 
-- `data`: tickers, dates, split ratios, cache directories
+- `data`: provider, tickers, dates, split ratios, cache directories
 - `features`: feature list, normalization, covariance window
 - `environment`: fee rate, slippage, reward coefficients
 - `model`: encoder type and dimensions
 - `training`: PPO hyperparameters, early stopping, checkpointing
 - `evaluation`: benchmark settings and report output paths
 
-## 10. Metrics
+## 11. Metrics
 
 The evaluation report includes:
 
@@ -224,9 +290,9 @@ The evaluation report includes:
 10. Turnover
 11. Avg Holding Period
 
-## 11. Visualizations
+## 12. Visualizations
 
-Saved to `outputs/figures/`:
+Saved to the configured evaluation figure directory:
 
 - `training_reward_curve.png`
 - `loss_curve.png`
@@ -236,11 +302,17 @@ Saved to `outputs/figures/`:
 - `baseline_comparison.png`
 - `rolling_sharpe.png`
 
-## 12. Robustness Features
+Default evaluation figure directories:
+
+- US/global config: `outputs/figures/us/`
+- Vietnam config: `outputs/figures/vn30/`
+
+## 13. Robustness Features
 
 The code handles:
 
 - Yahoo download retries
+- Vnstock download retries
 - Empty or failed ticker downloads
 - Missing values and forward/backward filling
 - NaN indicators
@@ -251,26 +323,32 @@ The code handles:
 - Early stopping
 - Checkpoint resume
 
-## 13. Troubleshooting Yahoo Finance Errors
+## 14. Troubleshooting Data Download Errors
 
-If Yahoo fails for some tickers:
+If a provider fails for some tickers:
 
 - The loader retries automatically
 - Failed tickers are skipped with logs
-- Raw CSV cache in `data/raw/` reduces repeated requests
+- Raw CSV cache in the configured `raw_dir` reduces repeated requests
 
 If you want a clean data refresh:
 
-1. Delete the corresponding files in `data/raw/`
+1. Delete the corresponding files in the configured `raw_dir`
 2. Run `python train.py` again
 
-If too many tickers fail:
+If too many Yahoo tickers fail:
 
 - Check internet connectivity
 - Try fewer tickers
 - Make sure ticker symbols are valid on Yahoo Finance
 
-## 14. Train / Validation / Test Split
+If too many Vietnam tickers fail:
+
+- Check that `data.provider` is `vnstock`
+- Verify ticker codes are valid on HOSE/HNX/UPCoM or as Vietnam indices/ETFs
+- Try switching `vn_source` between `VCI` and `KBS` if your environment blocks one source
+
+## 15. Train / Validation / Test Split
 
 Default split:
 
@@ -282,13 +360,37 @@ No shuffle is used because this is time-series data.
 
 Optional walk-forward settings are included in config for future extension.
 
-## 15. Example Workflow
+## 16. Example Workflow
 
 ```bash
 pip install -r requirements.txt
 python train.py
 python evaluate.py
 ```
+
+Vietnam workflow:
+
+```bash
+pip install -r requirements.txt
+python train.py --config configs/config_vn30.yaml
+python evaluate.py --config configs/config_vn30.yaml
+```
+
+Two-dataset PPO-only evaluation workflow:
+
+```bash
+python train.py --config configs/config.yaml
+python evaluate.py --config configs/config.yaml --rl-only
+
+python train.py --config configs/config_vn30.yaml
+python evaluate.py --config configs/config_vn30.yaml --rl-only
+```
+
+This gives you a clean evaluation section for the two datasets:
+
+- US/global dataset: metrics in `outputs/reports/metrics_summary.json`
+- Vietnam dataset: metrics in `outputs/reports/metrics_summary_vn30.json`
+- Separate PPO charts in `outputs/figures/us/` and `outputs/figures/vn30/`
 
 Expected artifacts:
 
@@ -298,7 +400,7 @@ Expected artifacts:
 - Comparison CSV / JSON in `outputs/reports/`
 - Charts in `outputs/figures/`
 
-## 16. Notes On Production Use
+## 17. Notes On Production Use
 
 This project is built to be clean, modular, and reproducible for research and extension. For live deployment, you would typically add:
 
@@ -309,11 +411,15 @@ This project is built to be clean, modular, and reproducible for research and ex
 - Regime filters and macro signals
 - Hyperparameter sweeps
 
-## 17. Command Summary
+## 18. Command Summary
 
 ```bash
 python train.py
 python evaluate.py
+python train.py --config configs/config_vn30.yaml
+python evaluate.py --config configs/config_vn30.yaml
+python evaluate.py --config configs/config.yaml --rl-only
+python evaluate.py --config configs/config_vn30.yaml --rl-only
 ```
 
 That is enough to run the end-to-end research pipeline after installing dependencies.

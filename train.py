@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import torch
 import yaml
 
 from src.agents.trainer import PPOTrainer
-from src.data_loader import YahooDataLoader, create_download_config
+from src.data_loader import build_data_loader, create_download_config
 from src.env.portfolio_env import PortfolioEnv
 from src.feature_engineering import engineer_features, time_series_split, walk_forward_splits
 from src.models.actor_critic import ActorCriticNetwork
@@ -68,12 +69,16 @@ def build_env(bundle, split, cfg) -> PortfolioEnv:
 
 
 def main() -> None:
-    cfg = load_config()
+    parser = argparse.ArgumentParser(description="Train the DRL portfolio model.")
+    parser.add_argument("--config", type=str, default="configs/config.yaml", help="Path to the YAML config file.")
+    args = parser.parse_args()
+
+    cfg = load_config(args.config)
     set_seed(int(cfg["project"]["seed"]))
     device = get_device(cfg["training"])
     LOGGER.info("Using device: %s", device)
 
-    loader = YahooDataLoader(create_download_config(cfg["data"]))
+    loader = build_data_loader(create_download_config(cfg["data"]))
     raw_df = loader.load()
     bundle = engineer_features(raw_df, cfg["features"], cfg["data"])
     bundle.save(cfg["data"]["processed_dir"])

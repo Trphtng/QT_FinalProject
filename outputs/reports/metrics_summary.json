@@ -11,44 +11,5 @@
     "Final Portfolio Value": 1232690.761076758,
     "Turnover": 0.006551518751557466,
     "Avg Holding Period": 152.6361297763954
-  },
-  "BuyHold EqualWeight": {
-    "Total Return %": 24.36614447244945,
-    "CAGR": 0.1905886460761672,
-    "Sharpe Ratio": 0.8538480127631096,
-    "Sortino Ratio": 1.456604866433983,
-    "Max Drawdown": -0.23482217024312868,
-    "Volatility": 0.23688229604956676,
-    "Calmar Ratio": 0.8116296935627363,
-    "Win Rate": 0.5396825396825397,
-    "Final Portfolio Value": 1243661.4447244944,
-    "Turnover": 0.0,
-    "Avg Holding Period": 100000000.0
-  },
-  "Markowitz": {
-    "Total Return %": 38.548032418051335,
-    "CAGR": 0.29801672990170336,
-    "Sharpe Ratio": 1.2462525717482904,
-    "Sortino Ratio": 2.104977656691102,
-    "Max Drawdown": -0.23482217024312868,
-    "Volatility": 0.23049696739159203,
-    "Calmar Ratio": 1.2691166664252558,
-    "Win Rate": 0.5650793650793651,
-    "Final Portfolio Value": 1385480.3241805134,
-    "Turnover": 0.02957971889818392,
-    "Avg Holding Period": 33.699612370565944
-  },
-  "Random Allocation": {
-    "Total Return %": 28.792919010792218,
-    "CAGR": 0.22437256339898126,
-    "Sharpe Ratio": 0.9164408034812549,
-    "Sortino Ratio": 1.603476413877132,
-    "Max Drawdown": -0.25082955774216376,
-    "Volatility": 0.25626013253669844,
-    "Calmar Ratio": 0.8945220229173368,
-    "Win Rate": 0.5492063492063493,
-    "Final Portfolio Value": 1287929.190107922,
-    "Turnover": 0.920415340600248,
-    "Avg Holding Period": 1.0830169186223366
   }
 }

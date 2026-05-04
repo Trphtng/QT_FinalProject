@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
@@ -126,7 +127,16 @@ def _adapt_bundle_features(bundle: DataBundle, expected_n_features: int) -> Data
 
 
 def main() -> None:
-    cfg = load_config()
+    parser = argparse.ArgumentParser(description="Evaluate a trained DRL portfolio model.")
+    parser.add_argument("--config", type=str, default="configs/config.yaml", help="Path to the YAML config file.")
+    parser.add_argument(
+        "--rl-only",
+        action="store_true",
+        help="Evaluate only the PPO model without comparing against baseline strategies.",
+    )
+    args = parser.parse_args()
+
+    cfg = load_config(args.config)
     device = get_device(cfg["training"])
     checkpoint = torch.load(cfg["training"]["checkpoint_path"], map_location=device)
     bundle = DataBundle.load(cfg["data"]["processed_dir"])
@@ -163,67 +173,86 @@ def main() -> None:
         weights=np.array(rl_output["weights"], dtype=np.float64),
     )
 
-    test_start, test_end = splits["test"]
-    test_returns = bundle.returns[test_start:test_end]
-    initial_cash = float(cfg["environment"]["initial_cash"])
-
-    buy_hold_output = run_buy_hold_equal_weight(test_returns, initial_cash)
-    markowitz_output = run_markowitz(
-        test_returns,
-        initial_value=initial_cash,
-        lookback=max(20, int(cfg["data"]["lookback_window"]) * 2),
-        rebalance_every=int(cfg["evaluation"]["benchmark_rebalance_every"]),
-    )
-    random_output = run_random_allocation(
-        test_returns,
-        initial_value=initial_cash,
-        seed=int(cfg["project"]["seed"]),
-    )
-
-    comparison = {
-        "PPO Actor-Critic": rl_metrics,
-        "BuyHold EqualWeight": compute_performance_metrics(
-            buy_hold_output["portfolio_values"],
-            buy_hold_output["portfolio_returns"],
-            buy_hold_output["turnover"],
-            buy_hold_output["weights"],
-        ),
-        "Markowitz": compute_performance_metrics(
-            markowitz_output["portfolio_values"],
-            markowitz_output["portfolio_returns"],
-            markowitz_output["turnover"],
-            markowitz_output["weights"],
-        ),
-        "Random Allocation": compute_performance_metrics(
-            random_output["portfolio_values"],
-            random_output["portfolio_returns"],
-            random_output["turnover"],
-            random_output["weights"],
-        ),
-    }
-
-    comparison_df = pd.DataFrame(comparison).T
-    comparison_csv = Path(cfg["evaluation"]["comparison_csv"])
-    comparison_csv.parent.mkdir(parents=True, exist_ok=True)
-    comparison_df.to_csv(comparison_csv)
-
+    report_payload = {"PPO Actor-Critic": rl_metrics}
     report_path = Path(cfg["evaluation"]["report_path"])
-    report_path.write_text(json.dumps(comparison, indent=2), encoding="utf-8")
+    comparison_df: pd.DataFrame | None = None
+
+    if not args.rl_only:
+        test_start, test_end = splits["test"]
+        test_returns = bundle.returns[test_start:test_end]
+        initial_cash = float(cfg["environment"]["initial_cash"])
+
+        buy_hold_output = run_buy_hold_equal_weight(test_returns, initial_cash)
+        markowitz_output = run_markowitz(
+            test_returns,
+            initial_value=initial_cash,
+            lookback=max(20, int(cfg["data"]["lookback_window"]) * 2),
+            rebalance_every=int(cfg["evaluation"]["benchmark_rebalance_every"]),
+        )
+        random_output = run_random_allocation(
+            test_returns,
+            initial_value=initial_cash,
+            seed=int(cfg["project"]["seed"]),
+        )
+
+        report_payload = {
+            "PPO Actor-Critic": rl_metrics,
+            "BuyHold EqualWeight": compute_performance_metrics(
+                buy_hold_output["portfolio_values"],
+                buy_hold_output["portfolio_returns"],
+                buy_hold_output["turnover"],
+                buy_hold_output["weights"],
+            ),
+            "Markowitz": compute_performance_metrics(
+                markowitz_output["portfolio_values"],
+                markowitz_output["portfolio_returns"],
+                markowitz_output["turnover"],
+                markowitz_output["weights"],
+            ),
+            "Random Allocation": compute_performance_metrics(
+                random_output["portfolio_values"],
+                random_output["portfolio_returns"],
+                random_output["turnover"],
+                random_output["weights"],
+            ),
+        }
+
+        comparison_df = pd.DataFrame(report_payload).T
+        comparison_csv = Path(cfg["evaluation"]["comparison_csv"])
+        comparison_csv.parent.mkdir(parents=True, exist_ok=True)
+        comparison_df.to_csv(comparison_csv)
+
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
+
+    figure_dir = Path(cfg["evaluation"].get("figure_dir", "outputs/figures"))
+    figure_dir.mkdir(parents=True, exist_ok=True)
 
     eval_dates = list(rl_output["dates"])
-    plot_equity_curve(eval_dates, np.array(rl_output["portfolio_values"]), "outputs/figures/equity_curve_test.png", "Test Equity Curve")
-    plot_drawdown(eval_dates, np.array(rl_output["portfolio_values"]), "outputs/figures/drawdown_chart.png")
-    plot_weights_heatmap(eval_dates, np.array(rl_output["weights"]), bundle.tickers, "outputs/figures/weight_heatmap.png")
-    plot_baseline_comparison(comparison_df, "outputs/figures/baseline_comparison.png")
+    plot_equity_curve(
+        eval_dates,
+        np.array(rl_output["portfolio_values"]),
+        str(figure_dir / "equity_curve_test.png"),
+        "Test Equity Curve",
+    )
+    plot_drawdown(eval_dates, np.array(rl_output["portfolio_values"]), str(figure_dir / "drawdown_chart.png"))
+    plot_weights_heatmap(
+        eval_dates,
+        np.array(rl_output["weights"]),
+        bundle.tickers,
+        str(figure_dir / "weight_heatmap.png"),
+    )
     plot_rolling_sharpe(
         eval_dates,
         np.array(rl_output["portfolio_returns"]),
         int(cfg["evaluation"]["rolling_sharpe_window"]),
-        "outputs/figures/rolling_sharpe.png",
+        str(figure_dir / "rolling_sharpe.png"),
     )
+    if comparison_df is not None:
+        plot_baseline_comparison(comparison_df, str(figure_dir / "baseline_comparison.png"))
 
     LOGGER.info("Evaluation completed. Metrics saved to %s", report_path)
-    LOGGER.info("\n%s", comparison_df.round(4).to_string())
+    LOGGER.info("\n%s", pd.DataFrame(report_payload).T.round(4).to_string())
 
 
 if __name__ == "__main__":

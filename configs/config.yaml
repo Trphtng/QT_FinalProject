@@ -4,6 +4,8 @@ project:
   output_dir: outputs
 
 data:
+  provider: "yahoo"
+  vn_source: "VCI"
   tickers:
     - AAPL
     - MSFT
@@ -132,3 +134,4 @@ evaluation:
   rolling_sharpe_window: 63
   report_path: "outputs/reports/metrics_summary.json"
   comparison_csv: "outputs/reports/baseline_comparison.csv"
+  figure_dir: "outputs/figures/us"
