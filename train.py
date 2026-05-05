@@ -12,7 +12,13 @@ import yaml
 from src.agents.trainer import PPOTrainer
 from src.data_loader import build_data_loader, create_download_config
 from src.env.portfolio_env import PortfolioEnv
-from src.feature_engineering import engineer_features, time_series_split, walk_forward_splits
+from src.feature_engineering import (
+    build_bundle_cache_key,
+    engineer_features,
+    load_cached_bundle_if_compatible,
+    time_series_split,
+    walk_forward_splits,
+)
 from src.models.actor_critic import ActorCriticNetwork
 from src.utils.logger import get_logger
 from src.utils.plotting import plot_training_curves
@@ -78,10 +84,15 @@ def main() -> None:
     device = get_device(cfg["training"])
     LOGGER.info("Using device: %s", device)
 
-    loader = build_data_loader(create_download_config(cfg["data"]))
-    raw_df = loader.load()
-    bundle = engineer_features(raw_df, cfg["features"], cfg["data"])
-    bundle.save(cfg["data"]["processed_dir"])
+    bundle = load_cached_bundle_if_compatible(cfg["data"]["processed_dir"], cfg["features"], cfg["data"])
+    if bundle is None:
+        loader = build_data_loader(create_download_config(cfg["data"]))
+        raw_df = loader.load()
+        bundle = engineer_features(raw_df, cfg["features"], cfg["data"])
+        bundle.save(
+            cfg["data"]["processed_dir"],
+            metadata_extra={"cache_key": build_bundle_cache_key(cfg["features"], cfg["data"])},
+        )
 
     default_splits = time_series_split(
         n_steps=len(bundle.dates),
@@ -129,6 +140,10 @@ def main() -> None:
             }
         )
         LOGGER.info("Fold %s completed | Score %.4f | Sharpe %.4f | MDD %.4f", fold_idx + 1, score, val_metrics["Sharpe Ratio"], val_metrics["Max Drawdown"])
+        if use_walk_forward:
+            fold_path = Path("outputs/reports/walk_forward_summary.json")
+            fold_path.parent.mkdir(parents=True, exist_ok=True)
+            fold_path.write_text(json.dumps(all_fold_metrics, indent=2), encoding="utf-8")
 
     plot_training_curves(final_history, "outputs/figures")
     summary_path = Path("outputs/reports/train_summary.json")

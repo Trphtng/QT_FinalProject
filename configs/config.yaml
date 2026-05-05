@@ -108,7 +108,8 @@ model:
 training:
   device: "auto"
   use_mixed_precision: true
-  total_epochs: 80
+  total_epochs: 50
+  max_rollout_steps_per_fold: 250
   rollout_epochs: 1
   ppo_epochs: 12
   minibatch_size: 256

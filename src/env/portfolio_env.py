@@ -33,6 +33,38 @@ class StepInfo:
     weights: np.ndarray
 
 
+class RollingMoments:
+    """O(1) rolling mean/std tracking for reward shaping."""
+
+    def __init__(self, maxlen: int) -> None:
+        self.maxlen = max(1, int(maxlen))
+        self.values: deque[float] = deque(maxlen=self.maxlen)
+        self.sum = 0.0
+        self.sum_sq = 0.0
+
+    def reset(self) -> None:
+        self.values.clear()
+        self.sum = 0.0
+        self.sum_sq = 0.0
+
+    def append(self, value: float) -> None:
+        if len(self.values) == self.maxlen:
+            removed = self.values.popleft()
+            self.sum -= removed
+            self.sum_sq -= removed * removed
+        self.values.append(value)
+        self.sum += value
+        self.sum_sq += value * value
+
+    def projected_mean_std(self, value: float) -> tuple[float, float]:
+        count = len(self.values) + 1
+        total = self.sum + value
+        total_sq = self.sum_sq + value * value
+        mean = total / count
+        variance = max(total_sq / count - mean * mean, 0.0)
+        return mean, float(np.sqrt(max(variance, 1e-8)))
+
+
 class PortfolioEnv:
     """A simple multi-asset portfolio environment with weight actions."""
 
@@ -102,13 +134,18 @@ class PortfolioEnv:
         self.n_assets = len(tickers)
         self.action_dim = self.n_assets + 1
         self.current_step = self.start_index
+        self.max_episode_steps = self.end_index - self.start_index
         self.portfolio_value = initial_cash
         self.peak_value = initial_cash
         self.current_weights = np.zeros(self.action_dim, dtype=np.float32)
         self.prev_weights = self.current_weights.copy()
         self.current_weights[-1] = 1.0
         self.portfolio_state_dim = self.action_dim * 2 if self.include_prev_weights else self.action_dim
-        self.recent_net_returns: deque[float] = deque(maxlen=self.sharpe_window)
+        self.recent_net_returns = RollingMoments(self.sharpe_window)
+        self.momentum_return_cumsum = np.concatenate(
+            [np.zeros((1, self.n_assets), dtype=np.float32), np.cumsum(self.returns, axis=0, dtype=np.float32)],
+            axis=0,
+        )
         self.turnover_history: list[float] = []
         self.weight_history: list[np.ndarray] = []
         self.value_history: list[float] = []
@@ -127,7 +164,7 @@ class PortfolioEnv:
         self.value_history = [self.portfolio_value]
         self.reward_history = []
         self.info_history = []
-        self.recent_net_returns = deque(maxlen=self.sharpe_window)
+        self.recent_net_returns.reset()
         return self._get_state()
 
     def step(self, action: np.ndarray) -> tuple[dict[str, np.ndarray], float, bool, dict[str, Any]]:
@@ -241,12 +278,9 @@ class PortfolioEnv:
     def _compute_sharpe_bonus(self, net_return: float) -> float:
         if self.lambda_sharpe_bonus <= 0.0:
             return 0.0
-        series = list(self.recent_net_returns)
-        series.append(net_return)
-        if len(series) < 5:
+        if len(self.recent_net_returns.values) + 1 < 5:
             return 0.0
-        mean = float(np.mean(series))
-        std = float(np.std(series))
+        mean, std = self.recent_net_returns.projected_mean_std(net_return)
         sharpe = mean / max(std, 1e-8)
         return float(self.lambda_sharpe_bonus * np.tanh(sharpe))
 
@@ -254,10 +288,12 @@ class PortfolioEnv:
         if self.lambda_momentum_bonus <= 0.0:
             return 0.0
         start = max(self.start_index, self.current_step - self.momentum_window + 1)
-        window = self.returns[start : self.current_step + 1]
-        if window.shape[0] < 3:
+        end = self.current_step + 1
+        window_len = end - start
+        if window_len < 3:
             return 0.0
-        trailing_mean = window.mean(axis=0)
+        trailing_sum = self.momentum_return_cumsum[end] - self.momentum_return_cumsum[start]
+        trailing_mean = trailing_sum / float(window_len)
         signal = float(np.dot(asset_weights, trailing_mean))
         return float(self.lambda_momentum_bonus * np.tanh(signal * self.momentum_scale))
 
@@ -284,8 +320,8 @@ class PortfolioEnv:
         else:
             portfolio_state = self.current_weights.copy()
         return {
-            "market": market_window.astype(np.float32),
-            "portfolio": portfolio_state.astype(np.float32),
+            "market": market_window,
+            "portfolio": portfolio_state,
         }
 
     def _info_to_dict(self, info: StepInfo) -> dict[str, Any]:

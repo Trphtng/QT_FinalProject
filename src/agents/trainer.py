@@ -252,31 +252,38 @@ class PPOTrainer:
         return self.history
 
     def collect_rollout(self, env: PortfolioEnv) -> tuple[RolloutBatch, float, dict[str, float]]:
-        market_list = []
-        portfolio_list = []
-        action_list = []
-        log_prob_list = []
-        reward_list = []
-        raw_reward_sum = 0.0
-        done_list = []
-        value_list = []
-        gross_returns: list[float] = []
-        net_returns: list[float] = []
-        turnovers: list[float] = []
-        drawdowns: list[float] = []
-        variances: list[float] = []
-        costs: list[float] = []
-        reward_log_terms: list[float] = []
-        reward_return_bonus_terms: list[float] = []
-        penalty_turnovers: list[float] = []
-        penalty_drawdowns: list[float] = []
-        penalty_variances: list[float] = []
-        reward_sharpe_bonus_terms: list[float] = []
-        reward_momentum_bonus_terms: list[float] = []
-
         state = env.reset()
+        rollout_step_limit = int(self.cfg.get("max_rollout_steps_per_fold", env.max_episode_steps))
+        max_steps = max(1, min(int(env.max_episode_steps), rollout_step_limit))
+        market_shape = state["market"].shape
+        portfolio_shape = state["portfolio"].shape
+        action_shape = (env.action_dim,)
+
+        market_batch = np.empty((max_steps, *market_shape), dtype=np.float32)
+        portfolio_batch = np.empty((max_steps, *portfolio_shape), dtype=np.float32)
+        action_batch = np.empty((max_steps, *action_shape), dtype=np.float32)
+        log_prob_batch = np.empty(max_steps, dtype=np.float32)
+        reward_batch = np.empty(max_steps, dtype=np.float32)
+        raw_reward_sum = 0.0
+        done_batch = np.empty(max_steps, dtype=np.float32)
+        value_batch = np.empty(max_steps, dtype=np.float32)
+        gross_return_sum = 0.0
+        net_return_sum = 0.0
+        turnover_sum = 0.0
+        drawdown_sum = 0.0
+        variance_sum = 0.0
+        cost_sum = 0.0
+        reward_log_term_sum = 0.0
+        reward_return_bonus_sum = 0.0
+        penalty_turnover_sum = 0.0
+        penalty_drawdown_sum = 0.0
+        penalty_variance_sum = 0.0
+        reward_sharpe_bonus_sum = 0.0
+        reward_momentum_bonus_sum = 0.0
+
         done = False
-        while not done:
+        step_count = 0
+        while not done and step_count < max_steps:
             market = self._tensor(state["market"]).unsqueeze(0)
             portfolio = self._tensor(state["portfolio"]).unsqueeze(0)
             with torch.no_grad():
@@ -286,55 +293,65 @@ class PPOTrainer:
             raw_reward_sum += float(reward)
             self.reward_stats.update(float(reward))
             reward = self.reward_stats.normalize(float(reward))
-            gross_returns.append(float(info["gross_return"]))
-            net_returns.append(float(info["net_return"]))
-            turnovers.append(float(info["turnover"]))
-            drawdowns.append(float(info["drawdown"]))
-            variances.append(float(info["variance"]))
-            costs.append(float(info.get("cost", info["transaction_cost"])))
-            reward_log_terms.append(float(info.get("reward_log_term", 0.0)))
-            reward_return_bonus_terms.append(float(info.get("reward_return_bonus", 0.0)))
-            penalty_turnovers.append(float(info.get("penalty_turnover", 0.0)))
-            penalty_drawdowns.append(float(info.get("penalty_drawdown", 0.0)))
-            penalty_variances.append(float(info.get("penalty_variance", 0.0)))
-            reward_sharpe_bonus_terms.append(float(info.get("reward_sharpe_bonus", 0.0)))
-            reward_momentum_bonus_terms.append(float(info.get("reward_momentum_bonus", 0.0)))
+            gross_return_sum += float(info["gross_return"])
+            net_return_sum += float(info["net_return"])
+            turnover_sum += float(info["turnover"])
+            drawdown_sum += float(info["drawdown"])
+            variance_sum += float(info["variance"])
+            cost_sum += float(info.get("cost", info["transaction_cost"]))
+            reward_log_term_sum += float(info.get("reward_log_term", 0.0))
+            reward_return_bonus_sum += float(info.get("reward_return_bonus", 0.0))
+            penalty_turnover_sum += float(info.get("penalty_turnover", 0.0))
+            penalty_drawdown_sum += float(info.get("penalty_drawdown", 0.0))
+            penalty_variance_sum += float(info.get("penalty_variance", 0.0))
+            reward_sharpe_bonus_sum += float(info.get("reward_sharpe_bonus", 0.0))
+            reward_momentum_bonus_sum += float(info.get("reward_momentum_bonus", 0.0))
 
-            market_list.append(market.squeeze(0))
-            portfolio_list.append(portfolio.squeeze(0))
-            action_list.append(output.action.squeeze(0))
-            log_prob_list.append(output.log_prob.squeeze(0))
-            reward_list.append(torch.tensor(reward, dtype=torch.float32))
-            done_list.append(torch.tensor(float(done), dtype=torch.float32))
-            value_list.append(output.value.squeeze(0))
+            market_batch[step_count] = state["market"]
+            portfolio_batch[step_count] = state["portfolio"]
+            action_batch[step_count] = action
+            log_prob_batch[step_count] = float(output.log_prob.item())
+            reward_batch[step_count] = reward
+            done_batch[step_count] = float(done)
+            value_batch[step_count] = float(output.value.item())
+            step_count += 1
             state = next_state
 
-        rewards = torch.stack(reward_list).to(self.device)
-        dones = torch.stack(done_list).to(self.device)
-        values = torch.stack(value_list).to(self.device)
+        market_batch = market_batch[:step_count]
+        portfolio_batch = portfolio_batch[:step_count]
+        action_batch = action_batch[:step_count]
+        log_prob_batch = log_prob_batch[:step_count]
+        reward_batch = reward_batch[:step_count]
+        done_batch = done_batch[:step_count]
+        value_batch = value_batch[:step_count]
+
+        rewards = self._tensor(reward_batch)
+        dones = self._tensor(done_batch)
+        values = self._tensor(value_batch)
         advantages, returns = self.compute_gae(rewards, dones, values)
+        denom = float(max(step_count, 1))
 
         diagnostics = {
-            "mean_gross_return": float(np.mean(gross_returns)) if gross_returns else 0.0,
-            "mean_net_return": float(np.mean(net_returns)) if net_returns else 0.0,
-            "mean_turnover": float(np.mean(turnovers)) if turnovers else 0.0,
-            "mean_drawdown": float(np.mean(drawdowns)) if drawdowns else 0.0,
-            "mean_variance": float(np.mean(variances)) if variances else 0.0,
-            "mean_cost": float(np.mean(costs)) if costs else 0.0,
-            "mean_reward_log_term": float(np.mean(reward_log_terms)) if reward_log_terms else 0.0,
-            "mean_reward_return_bonus": float(np.mean(reward_return_bonus_terms)) if reward_return_bonus_terms else 0.0,
-            "mean_penalty_turnover": float(np.mean(penalty_turnovers)) if penalty_turnovers else 0.0,
-            "mean_penalty_drawdown": float(np.mean(penalty_drawdowns)) if penalty_drawdowns else 0.0,
-            "mean_penalty_variance": float(np.mean(penalty_variances)) if penalty_variances else 0.0,
-            "mean_reward_sharpe_bonus": float(np.mean(reward_sharpe_bonus_terms)) if reward_sharpe_bonus_terms else 0.0,
-            "mean_reward_momentum_bonus": float(np.mean(reward_momentum_bonus_terms)) if reward_momentum_bonus_terms else 0.0,
+            "mean_gross_return": gross_return_sum / denom,
+            "mean_net_return": net_return_sum / denom,
+            "mean_turnover": turnover_sum / denom,
+            "mean_drawdown": drawdown_sum / denom,
+            "mean_variance": variance_sum / denom,
+            "mean_cost": cost_sum / denom,
+            "mean_reward_log_term": reward_log_term_sum / denom,
+            "mean_reward_return_bonus": reward_return_bonus_sum / denom,
+            "mean_penalty_turnover": penalty_turnover_sum / denom,
+            "mean_penalty_drawdown": penalty_drawdown_sum / denom,
+            "mean_penalty_variance": penalty_variance_sum / denom,
+            "mean_reward_sharpe_bonus": reward_sharpe_bonus_sum / denom,
+            "mean_reward_momentum_bonus": reward_momentum_bonus_sum / denom,
         }
 
         return RolloutBatch(
-            market=torch.stack(market_list).to(self.device),
-            portfolio=torch.stack(portfolio_list).to(self.device),
-            actions=torch.stack(action_list).to(self.device),
-            log_probs=torch.stack(log_prob_list).to(self.device),
+            market=self._tensor(market_batch),
+            portfolio=self._tensor(portfolio_batch),
+            actions=self._tensor(action_batch),
+            log_probs=self._tensor(log_prob_batch),
             rewards=rewards,
             dones=dones,
             values=values,
@@ -481,7 +498,7 @@ class PPOTrainer:
         LOGGER.info("Resumed training from epoch %s", self.start_epoch)
 
     def _tensor(self, array: np.ndarray) -> torch.Tensor:
-        return torch.tensor(array, dtype=torch.float32, device=self.device)
+        return torch.as_tensor(array, dtype=torch.float32, device=self.device)
 
     def _cosine_decay(self, step: int, total_steps: int, start: float, end: float) -> float:
         if total_steps <= 1:

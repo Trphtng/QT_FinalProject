@@ -134,11 +134,24 @@ python train.py --config configs/config_vn30.yaml
 Training pipeline:
 
 1. Download or load cached market data from the configured provider
-2. Build technical indicators and covariance matrices
-3. Split time series into train/validation/test
-4. Train PPO-style Actor-Critic
-5. Save checkpoints and TensorBoard logs
-6. Save processed dataset to the configured `processed_dir`
+2. Reuse the cached processed dataset when the active data/feature config has not changed
+3. Otherwise build technical indicators and covariance matrices and save them to the processed cache
+4. Split time series into train/validation/test or walk-forward folds
+5. Train PPO-style Actor-Critic
+6. Save checkpoints and TensorBoard logs
+7. Save processed dataset to the configured `processed_dir`
+
+Current default training budget in both bundled configs:
+
+- `total_epochs: 50`
+- `max_rollout_steps_per_fold: 250`
+- Walk-forward training enabled
+
+Data loading notes:
+
+- Raw ticker downloads are cached in the configured `raw_dir`
+- Processed tensors are cached in the configured `processed_dir`
+- Multi-ticker downloads run in parallel via `data.max_workers`
 
 ### TensorBoard
 
@@ -177,8 +190,10 @@ python evaluate.py --config configs/config_vn30.yaml --rl-only
 Evaluation will:
 
 - Load the saved processed dataset
-- Load the best trained model
-- Backtest on the test split
+- If walk-forward is enabled, automatically select the best completed fold from `outputs/reports/walk_forward_summary.json`
+- If that summary file is not available yet, fall back to the most recently trained fold checkpoint
+- Otherwise load the default checkpoint from `training.checkpoint_path`
+- Backtest on the matching test split for the selected fold
 - Compare against:
   - Buy and Hold Equal Weight
   - Mean-Variance Markowitz
@@ -268,10 +283,11 @@ Supported values:
 Important sections in `configs/config.yaml`:
 
 - `data`: provider, tickers, dates, split ratios, cache directories
+- `data.max_workers`: parallel download workers for multi-ticker ingestion
 - `features`: feature list, normalization, covariance window
 - `environment`: fee rate, slippage, reward coefficients
 - `model`: encoder type and dimensions
-- `training`: PPO hyperparameters, early stopping, checkpointing
+- `training`: PPO hyperparameters, early stopping, checkpointing, `total_epochs`, and `max_rollout_steps_per_fold`
 - `evaluation`: benchmark settings and report output paths
 
 ## 11. Metrics
@@ -330,6 +346,7 @@ If a provider fails for some tickers:
 - The loader retries automatically
 - Failed tickers are skipped with logs
 - Raw CSV cache in the configured `raw_dir` reduces repeated requests
+- Processed dataset cache in the configured `processed_dir` reduces repeated feature engineering
 
 If you want a clean data refresh:
 
@@ -358,7 +375,7 @@ Default split:
 
 No shuffle is used because this is time-series data.
 
-Optional walk-forward settings are included in config for future extension.
+Walk-forward training is enabled in the bundled configs. Each completed fold writes or updates `outputs/reports/walk_forward_summary.json`, which `evaluate.py` uses to pick the best available fold automatically.
 
 ## 16. Example Workflow
 
@@ -397,6 +414,7 @@ Expected artifacts:
 - Model checkpoints in `outputs/models/`
 - Processed arrays in `data/processed/`
 - TensorBoard logs in `outputs/tensorboard/`
+- Walk-forward fold summary in `outputs/reports/walk_forward_summary.json`
 - Comparison CSV / JSON in `outputs/reports/`
 - Charts in `outputs/figures/`
 

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,7 @@ class DataBundle:
     prices: np.ndarray
     market_regime: np.ndarray
 
-    def save(self, output_dir: str) -> None:
+    def save(self, output_dir: str, metadata_extra: dict[str, Any] | None = None) -> None:
         """Persist processed arrays and metadata."""
         output = Path(output_dir)
         output.mkdir(parents=True, exist_ok=True)
@@ -44,6 +45,8 @@ class DataBundle:
             "tickers": self.tickers,
             "feature_names": self.feature_names,
         }
+        if metadata_extra:
+            metadata.update(metadata_extra)
         (output / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
     @classmethod
@@ -62,6 +65,50 @@ class DataBundle:
             prices=arrays["prices"],
             market_regime=arrays["market_regime"],
         )
+
+
+def build_bundle_cache_key(feature_cfg: dict, data_cfg: dict) -> str:
+    """Create a stable cache key for the processed dataset configuration."""
+    relevant_payload = {
+        "feature_cfg": feature_cfg,
+        "data_cfg": {
+            "tickers": list(data_cfg.get("tickers", [])),
+            "start_date": data_cfg.get("start_date"),
+            "end_date": data_cfg.get("end_date"),
+            "interval": data_cfg.get("interval"),
+            "lookback_window": data_cfg.get("lookback_window"),
+            "min_history": data_cfg.get("min_history"),
+            "train_ratio": data_cfg.get("train_ratio"),
+            "provider": data_cfg.get("provider"),
+            "vn_source": data_cfg.get("vn_source"),
+        },
+    }
+    payload = json.dumps(relevant_payload, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def load_cached_bundle_if_compatible(output_dir: str, feature_cfg: dict, data_cfg: dict) -> DataBundle | None:
+    """Return a cached processed bundle if it matches the active config."""
+    output = Path(output_dir)
+    dataset_path = output / "dataset.npz"
+    metadata_path = output / "metadata.json"
+    if not dataset_path.exists() or not metadata_path.exists():
+        return None
+
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        LOGGER.warning("Ignoring corrupted processed metadata at %s", metadata_path)
+        return None
+
+    expected_key = build_bundle_cache_key(feature_cfg, data_cfg)
+    cached_key = metadata.get("cache_key")
+    if cached_key != expected_key:
+        LOGGER.info("Processed dataset cache key mismatch. Rebuilding features.")
+        return None
+
+    LOGGER.info("Loading cached processed dataset from %s", output)
+    return DataBundle.load(str(output))
 
 
 def compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:

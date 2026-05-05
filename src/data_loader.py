@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,7 @@ class DownloadConfig:
     max_retries: int
     retry_delay_seconds: int
     vn_source: str
+    max_workers: int
 
 
 class YahooDataLoader:
@@ -44,12 +46,16 @@ class YahooDataLoader:
         """Return a long-format dataframe indexed by Date and Ticker."""
         frames: list[pd.DataFrame] = []
         failed: list[str] = []
-        for ticker in self.config.tickers:
-            try:
-                frames.append(self._load_single_ticker(ticker))
-            except Exception as exc:  # pragma: no cover - defensive logging
-                failed.append(ticker)
-                LOGGER.exception("Failed to load %s: %s", ticker, exc)
+        max_workers = max(1, min(self.config.max_workers, len(self.config.tickers)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {executor.submit(self._load_single_ticker, ticker): ticker for ticker in self.config.tickers}
+            for future in as_completed(future_map):
+                ticker = future_map[future]
+                try:
+                    frames.append(future.result())
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    failed.append(ticker)
+                    LOGGER.exception("Failed to load %s: %s", ticker, exc)
 
         if not frames:
             raise RuntimeError("No ticker could be downloaded from Yahoo Finance.")
@@ -120,12 +126,16 @@ class VNStockDataLoader:
     def load(self) -> pd.DataFrame:
         frames: list[pd.DataFrame] = []
         failed: list[str] = []
-        for ticker in self.config.tickers:
-            try:
-                frames.append(self._load_single_ticker(ticker))
-            except Exception as exc:  # pragma: no cover - defensive logging
-                failed.append(ticker)
-                LOGGER.exception("Failed to load %s from vnstock: %s", ticker, exc)
+        max_workers = max(1, min(self.config.max_workers, len(self.config.tickers)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {executor.submit(self._load_single_ticker, ticker): ticker for ticker in self.config.tickers}
+            for future in as_completed(future_map):
+                ticker = future_map[future]
+                try:
+                    frames.append(future.result())
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    failed.append(ticker)
+                    LOGGER.exception("Failed to load %s from vnstock: %s", ticker, exc)
 
         if not frames:
             raise RuntimeError("No ticker could be downloaded from vnstock.")
@@ -260,6 +270,7 @@ def create_download_config(data_cfg: dict) -> DownloadConfig:
         max_retries=int(data_cfg.get("max_retries", 3)),
         retry_delay_seconds=int(data_cfg.get("retry_delay_seconds", 2)),
         vn_source=str(data_cfg.get("vn_source", "VCI")),
+        max_workers=int(data_cfg.get("max_workers", 4)),
     )
 
 

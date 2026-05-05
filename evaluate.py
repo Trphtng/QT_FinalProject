@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -16,7 +17,7 @@ from src.baselines.buy_hold import run_buy_hold_equal_weight
 from src.baselines.markowitz import run_markowitz
 from src.baselines.random_strategy import run_random_allocation
 from src.env.portfolio_env import PortfolioEnv
-from src.feature_engineering import DataBundle, time_series_split
+from src.feature_engineering import DataBundle, time_series_split, walk_forward_splits
 from src.models.actor_critic import ActorCriticNetwork
 from src.utils.logger import get_logger
 from src.utils.metrics import compute_performance_metrics
@@ -126,6 +127,59 @@ def _adapt_bundle_features(bundle: DataBundle, expected_n_features: int) -> Data
     )
 
 
+def _extract_fold_number(path: Path, base_checkpoint: Path) -> int | None:
+    pattern = rf"^{re.escape(base_checkpoint.stem)}_fold(\d+){re.escape(base_checkpoint.suffix)}$"
+    match = re.match(pattern, path.name)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _resolve_walk_forward_checkpoint(cfg: dict, bundle: DataBundle) -> tuple[Path, dict[str, tuple[int, int]]]:
+    base_checkpoint = Path(cfg["training"]["checkpoint_path"])
+    default_splits = time_series_split(
+        n_steps=len(bundle.dates),
+        train_ratio=float(cfg["data"]["train_ratio"]),
+        val_ratio=float(cfg["data"]["val_ratio"]),
+        test_ratio=float(cfg["data"]["test_ratio"]),
+    )
+    wf_splits = walk_forward_splits(len(bundle.dates), cfg["data"])
+    walk_forward_enabled = bool(cfg["data"].get("walk_forward", {}).get("enabled", False) and wf_splits)
+    if not walk_forward_enabled:
+        return base_checkpoint, default_splits
+
+    summary_path = Path(cfg["evaluation"].get("walk_forward_summary_path", "outputs/reports/walk_forward_summary.json"))
+    selected_fold: int | None = None
+
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        if summary:
+            best_entry = max(summary, key=lambda item: float(item.get("score", float("-inf"))))
+            selected_fold = int(best_entry["fold"])
+            LOGGER.info("Using best walk-forward fold %s from %s", selected_fold, summary_path)
+
+    if selected_fold is None:
+        fold_candidates = sorted(base_checkpoint.parent.glob(f"{base_checkpoint.stem}_fold*{base_checkpoint.suffix}"))
+        fold_candidates = [path for path in fold_candidates if _extract_fold_number(path, base_checkpoint) is not None]
+        if not fold_candidates:
+            LOGGER.warning("Walk-forward is enabled but no fold checkpoint was found. Falling back to %s", base_checkpoint)
+            return base_checkpoint, default_splits
+        latest_checkpoint = max(fold_candidates, key=lambda path: path.stat().st_mtime)
+        selected_fold = _extract_fold_number(latest_checkpoint, base_checkpoint)
+        LOGGER.info("Walk-forward summary not found. Using latest trained fold checkpoint %s", latest_checkpoint)
+
+    if selected_fold is None or selected_fold < 1 or selected_fold > len(wf_splits):
+        LOGGER.warning("Resolved fold %s is invalid for current dataset. Falling back to %s", selected_fold, base_checkpoint)
+        return base_checkpoint, default_splits
+
+    checkpoint_path = base_checkpoint.parent / f"{base_checkpoint.stem}_fold{selected_fold}{base_checkpoint.suffix}"
+    if not checkpoint_path.exists():
+        LOGGER.warning("Resolved fold checkpoint %s does not exist. Falling back to %s", checkpoint_path, base_checkpoint)
+        return base_checkpoint, default_splits
+
+    return checkpoint_path, wf_splits[selected_fold - 1]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate a trained DRL portfolio model.")
     parser.add_argument("--config", type=str, default="configs/config.yaml", help="Path to the YAML config file.")
@@ -138,21 +192,16 @@ def main() -> None:
 
     cfg = load_config(args.config)
     device = get_device(cfg["training"])
-    checkpoint = torch.load(cfg["training"]["checkpoint_path"], map_location=device)
     bundle = DataBundle.load(cfg["data"]["processed_dir"])
+    checkpoint_path, selected_split = _resolve_walk_forward_checkpoint(cfg, bundle)
+    checkpoint = torch.load(checkpoint_path, map_location=device)
     expected_n_features, expected_portfolio_dim = _infer_checkpoint_dims(checkpoint, len(bundle.tickers))
     bundle = _adapt_bundle_features(bundle, expected_n_features)
     include_prev_weights = expected_portfolio_dim > (len(bundle.tickers) + 1)
     cfg = dict(cfg)
     cfg["environment"] = dict(cfg["environment"])
     cfg["environment"]["include_prev_weights"] = include_prev_weights
-    splits = time_series_split(
-        n_steps=len(bundle.dates),
-        train_ratio=float(cfg["data"]["train_ratio"]),
-        val_ratio=float(cfg["data"]["val_ratio"]),
-        test_ratio=float(cfg["data"]["test_ratio"]),
-    )
-    test_env = build_env(bundle, splits["test"], cfg)
+    test_env = build_env(bundle, selected_split["test"], cfg)
 
     model = ActorCriticNetwork(
         n_assets=len(bundle.tickers),
@@ -178,7 +227,7 @@ def main() -> None:
     comparison_df: pd.DataFrame | None = None
 
     if not args.rl_only:
-        test_start, test_end = splits["test"]
+        test_start, test_end = selected_split["test"]
         test_returns = bundle.returns[test_start:test_end]
         initial_cash = float(cfg["environment"]["initial_cash"])
 
@@ -251,7 +300,8 @@ def main() -> None:
     if comparison_df is not None:
         plot_baseline_comparison(comparison_df, str(figure_dir / "baseline_comparison.png"))
 
-    LOGGER.info("Evaluation completed. Metrics saved to %s", report_path)
+    LOGGER.info("Evaluation completed using checkpoint %s", checkpoint_path)
+    LOGGER.info("Metrics saved to %s", report_path)
     LOGGER.info("\n%s", pd.DataFrame(report_payload).T.round(4).to_string())
 
 
