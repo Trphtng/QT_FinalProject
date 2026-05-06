@@ -188,12 +188,64 @@ def main() -> None:
         action="store_true",
         help="Evaluate only the PPO model without comparing against baseline strategies.",
     )
+    parser.add_argument(
+        "--fold",
+        type=int,
+        default=None,
+        help="Specify which walk-forward fold to evaluate (e.g. --fold 7). Overrides auto-selection.",
+    )
+    parser.add_argument(
+        "--list-folds",
+        action="store_true",
+        help="List all available fold checkpoints and their validation scores, then exit.",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
     device = get_device(cfg["training"])
     bundle = DataBundle.load(cfg["data"]["processed_dir"])
-    checkpoint_path, selected_split = _resolve_walk_forward_checkpoint(cfg, bundle)
+
+    # --list-folds: show available checkpoints and exit
+    if args.list_folds:
+        base_ckpt = Path(cfg["training"]["checkpoint_path"])
+        summary_path = Path(cfg["evaluation"].get("walk_forward_summary_path", "outputs/reports/walk_forward_summary.json"))
+        print(f"\n{'='*65}")
+        print(f"  Available fold checkpoints")
+        print(f"{'='*65}")
+        scores: dict[int, float] = {}
+        if summary_path.exists():
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            for entry in summary:
+                fold_num = int(entry["fold"])
+                score = float(entry.get("score", 0.0))
+                if score < 9000:   # ignore forced-selection sentinel
+                    scores[fold_num] = score
+        fold_candidates = sorted(base_ckpt.parent.glob(f"{base_ckpt.stem}_fold*{base_ckpt.suffix}"))
+        for ckpt in fold_candidates:
+            match = _extract_fold_number(ckpt, base_ckpt)
+            if match is not None:
+                val_score = scores.get(match, float("nan"))
+                size_mb = ckpt.stat().st_size / 1e6
+                print(f"  Fold {match:3d} | {ckpt.name}  ({size_mb:.1f} MB) | val_score={val_score:+.4f}")
+        print(f"\nUsage: python evaluate.py --fold <N>")
+        return
+
+    # --fold: manually override fold selection
+    if args.fold is not None:
+        base_ckpt = Path(cfg["training"]["checkpoint_path"])
+        wf_splits = walk_forward_splits(len(bundle.dates), cfg["data"])
+        forced_fold = int(args.fold)
+        if not wf_splits or forced_fold < 1 or forced_fold > len(wf_splits):
+            LOGGER.error("--fold %d is out of range. Valid range: 1 to %d", forced_fold, len(wf_splits) if wf_splits else 0)
+            return
+        checkpoint_path = base_ckpt.parent / f"{base_ckpt.stem}_fold{forced_fold}{base_ckpt.suffix}"
+        if not checkpoint_path.exists():
+            LOGGER.error("Checkpoint for fold %d not found: %s", forced_fold, checkpoint_path)
+            return
+        selected_split = wf_splits[forced_fold - 1]
+        LOGGER.info("Manually selected fold %d: %s", forced_fold, checkpoint_path)
+    else:
+        checkpoint_path, selected_split = _resolve_walk_forward_checkpoint(cfg, bundle)
     checkpoint = torch.load(checkpoint_path, map_location=device)
     expected_n_features, expected_portfolio_dim = _infer_checkpoint_dims(checkpoint, len(bundle.tickers))
     bundle = _adapt_bundle_features(bundle, expected_n_features)

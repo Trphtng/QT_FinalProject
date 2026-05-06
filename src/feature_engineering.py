@@ -188,6 +188,9 @@ def engineer_features(raw_df: pd.DataFrame, feature_cfg: dict, data_cfg: dict) -
         group["Momentum10"] = group["Close"].pct_change(10)
         group["RealizedVol20"] = group["LogReturn"].rolling(20).std().fillna(0.0) * np.sqrt(20.0)
         group["Momentum20"] = group["Close"].pct_change(20)
+        downside_returns = np.minimum(group["LogReturn"], 0.0)
+        group["DownsideVol20"] = downside_returns.rolling(20).std().fillna(0.0) * np.sqrt(20.0)
+        group["TrendSlope20"] = group["SMA20"].diff(5) / group["SMA20"].shift(5).replace(0.0, np.nan)
         local_peak = group["Close"].rolling(60, min_periods=1).max()
         group["DrawdownLocalPeak"] = 1.0 - group["Close"] / local_peak.replace(0.0, np.nan)
 

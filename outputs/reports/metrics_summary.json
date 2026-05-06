@@ -1,0 +1,54 @@
+{
+  "PPO Actor-Critic": {
+    "Total Return %": 37.92,
+    "CAGR": 0.291,
+    "Sharpe Ratio": 1.31,
+    "Sortino Ratio": 2.15,
+    "Max Drawdown": -0.172,
+    "Volatility": 0.190,
+    "Calmar Ratio": 1.69,
+    "Win Rate": 0.535,
+    "Final Portfolio Value": 1379200.0,
+    "Turnover": 0.0075,
+    "Avg Holding Period": 152.6
+  },
+  "BuyHold EqualWeight": {
+    "Total Return %": 24.37,
+    "CAGR": 0.191,
+    "Sharpe Ratio": 0.854,
+    "Sortino Ratio": 1.45,
+    "Max Drawdown": -0.235,
+    "Volatility": 0.237,
+    "Calmar Ratio": 1.04,
+    "Win Rate": 0.540,
+    "Final Portfolio Value": 1243700.0,
+    "Turnover": 0.0,
+    "Avg Holding Period": 100000000.0
+  },
+  "Markowitz": {
+    "Total Return %": 38.55,
+    "CAGR": 0.298,
+    "Sharpe Ratio": 1.25,
+    "Sortino Ratio": 2.05,
+    "Max Drawdown": -0.235,
+    "Volatility": 0.230,
+    "Calmar Ratio": 1.27,
+    "Win Rate": 0.565,
+    "Final Portfolio Value": 1385500.0,
+    "Turnover": 0.030,
+    "Avg Holding Period": 33.7
+  },
+  "Random Allocation": {
+    "Total Return %": 28.79,
+    "CAGR": 0.224,
+    "Sharpe Ratio": 0.92,
+    "Sortino Ratio": 1.60,
+    "Max Drawdown": -0.251,
+    "Volatility": 0.256,
+    "Calmar Ratio": 0.89,
+    "Win Rate": 0.549,
+    "Final Portfolio Value": 1287900.0,
+    "Turnover": 0.920,
+    "Avg Holding Period": 1.08
+  }
+}

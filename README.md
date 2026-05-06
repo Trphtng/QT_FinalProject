@@ -1,243 +1,385 @@
-# Deep Reinforcement Learning Portfolio Management
+# Quản lý Danh mục Đầu tư bằng Deep Reinforcement Learning (PPO)
 
-Production-ready project for multi-asset portfolio management with a PPO-style Actor-Critic architecture in PyTorch. The system downloads real market data from Yahoo Finance or Vietnam market data via Vnstock, engineers technical indicators, trains a portfolio policy over historical data, and compares the learned strategy against strong baselines.
+Hệ thống đầy đủ cho bài toán phân bổ danh mục đa tài sản, sử dụng kiến trúc **PPO Actor-Critic** với PyTorch. Tải dữ liệu thị trường thực tế từ Yahoo Finance hoặc thị trường Việt Nam (Vnstock), tự động tính toán các chỉ số kỹ thuật, huấn luyện chính sách danh mục, và so sánh với các chiến lược cơ bản (baseline).
 
-## 1. Project Overview
+---
 
-This repository builds a full DRL workflow for portfolio allocation:
+## Mục lục
 
-- Multi-asset market simulation from historical OHLCV data
-- Technical feature engineering: returns, RSI, MACD, Bollinger Bands, moving averages, volatility, momentum
-- Selectable encoder backbone:
-  - `LSTM`
-  - `CNN1D`
-  - `Transformer Encoder`
-- PPO-style clipped Actor-Critic for stable policy optimization
-- Reward with transaction cost and volatility penalty
-- Full evaluation and benchmark comparison
+1. [Tổng quan dự án](#1-tổng-quan-dự-án)
+2. [Kiến trúc mô hình](#2-kiến-trúc-mô-hình)
+3. [Cấu trúc thư mục](#3-cấu-trúc-thư-mục)
+4. [Cài đặt môi trường](#4-cài-đặt-môi-trường)
+5. [Cấu hình hệ thống](#5-cấu-hình-hệ-thống)
+6. [Hướng dẫn Huấn luyện](#6-hướng-dẫn-huấn-luyện)
+7. [Hướng dẫn Đánh giá](#7-hướng-dẫn-đánh-giá)
+8. [Đánh giá toàn bộ Fold](#8-đánh-giá-toàn-bộ-fold)
+9. [Tạo báo cáo HTML](#9-tạo-báo-cáo-html)
+10. [Danh sách tài sản mặc định](#10-danh-sách-tài-sản-mặc-định)
+11. [Hỗ trợ thị trường Việt Nam](#11-hỗ-trợ-thị-trường-việt-nam)
+12. [Các chỉ số đánh giá](#12-các-chỉ-số-đánh-giá)
+13. [Biểu đồ xuất ra](#13-biểu-đồ-xuất-ra)
+14. [Xử lý lỗi thường gặp](#14-xử-lý-lỗi-thường-gặp)
+15. [Quy trình làm việc đầy đủ](#15-quy-trình-làm-việc-đầy-đủ)
+16. [Tóm tắt lệnh](#16-tóm-tắt-lệnh)
 
-The actor outputs target portfolio weights over all risky assets plus a cash bucket, and the critic estimates the state value.
+---
 
-## 2. Model Architecture
+## 1. Tổng quan dự án
 
-### Input State
+Dự án xây dựng quy trình DRL hoàn chỉnh cho bài toán phân bổ danh mục:
 
-At each timestep, the state contains:
+- **Dữ liệu thị trường**: mô phỏng từ dữ liệu OHLCV lịch sử thực tế
+- **Feature Engineering**: log return, RSI, MACD, Bollinger Bands, SMA/EMA, volatility, momentum, EMA Sharpe, drawdown, trend signal
+- **Backbone encoder**: LSTM / CNN1D / Transformer (chọn qua config)
+- **Thuật toán**: PPO clipped Actor-Critic — ổn định và phù hợp với dữ liệu tài chính
+- **Reward function (V3)**: tích hợp log-return, EMA Sharpe bonus, momentum bonus, penalty turnover và drawdown
+- **Walk-Forward Cross-Validation**: 18 folds, mỗi fold 126 ngày test
+- **Baselines**: Buy & Hold Equal Weight, Markowitz (MVO), Random Allocation
 
-- Rolling lookback window of market features for all assets
-- Current portfolio weights
-- Cash ratio
+---
 
-Feature set is configurable in `configs/config.yaml`.
+## 2. Kiến trúc mô hình
+
+### State (Đầu vào)
+
+Tại mỗi bước thời gian, state gồm:
+
+| Thành phần | Mô tả |
+|---|---|
+| Market features | Cửa sổ lookback × số tài sản × số feature |
+| Portfolio weights | Tỷ trọng hiện tại của từng tài sản |
+| Cash ratio | Tỷ lệ tiền mặt |
+| Rolling volatility | Biến động ngắn hạn |
+| EMA Sharpe | Sharpe ratio theo EMA (anti-noise) |
+| Current drawdown | Mức độ suy giảm từ đỉnh |
+| Trend signal | Tín hiệu xu hướng thị trường |
+
+> ⚠️ **Quan trọng**: `portfolio_state_dim = 26` khi `include_prev_weights: true`. Các checkpoint cũ (dim=22) sẽ không tương thích với code hiện tại.
 
 ### Encoder
 
-Choose via:
+Chọn loại encoder trong config:
 
 ```yaml
 model:
-  encoder_type: "lstm"        # or cnn / transformer
+  encoder_type: "transformer"   # Khuyến nghị: tốt nhất trên time-series tài chính
+  # encoder_type: "lstm"
+  # encoder_type: "cnn"
 ```
 
 ### Actor
 
-- Shared latent representation
-- Dirichlet policy over portfolio weights
-- Sampled weights always sum to 1
-- Deterministic inference uses the mean of the Dirichlet distribution
+- Shared latent representation từ encoder
+- **Phân phối Dirichlet** cho portfolio weights
+- Tổng weights luôn = 1 (bao gồm cash)
+- Inference deterministic: dùng mean của Dirichlet
 
 ### Critic
 
-- Scalar state-value head
+- Scalar state-value head (ước tính V(s))
 
-### Reward
+### Reward Function (Version 3 — hiện tại)
 
-Default reward:
-
-```text
-R_t = log(1 + portfolio_return - kappa * transaction_cost) - lambda * portfolio_variance
+```
+R_t = λ_return × log(1 + r_t)
+    + λ_sharpe  × EMA_Sharpe_bonus
+    + λ_momo    × Momentum_bonus
+    - λ_turn    × Turnover_penalty
+    - λ_dd      × Drawdown_penalty
+    - λ_var     × Downside_variance_penalty
 ```
 
-Optional Sharpe-style approximation:
+> ✅ **Điểm mạnh**: EMA Sharpe loại bỏ nhiễu của rolling window. Log-return phản ánh đúng lãi kép.
+> ⚠️ **Reward được clip về [-0.1, 0.1]** và normalize bằng RunningMeanStd để ổn định gradient.
 
-```yaml
-environment:
-  reward_mode: "sharpe"
-```
+---
 
-## 3. Folder Structure
+## 3. Cấu trúc thư mục
 
 ```text
-project/
+QT_FinalProject/
 │── configs/
-│   └── config.yaml
+│   ├── config.yaml              ← Config chính (US tickers, Yahoo Finance)
+│   └── config_vn30.yaml         ← Config thị trường Việt Nam (Vnstock)
+│
 │── data/
-│   ├── raw/
-│   └── processed/
+│   ├── raw/                     ← Cache CSV thô (tự động tạo)
+│   └── processed/               ← Cache tensor đã xử lý (tự động tạo)
+│
 │── src/
-│   ├── data_loader.py
-│   ├── feature_engineering.py
+│   ├── data_loader.py           ← Tải dữ liệu Yahoo / Vnstock
+│   ├── feature_engineering.py  ← Tính RSI, MACD, Bollinger, volatility...
 │   ├── env/
-│   │   └── portfolio_env.py
+│   │   └── portfolio_env.py    ← ⭐ Môi trường RL (reward V3, state augmented)
 │   ├── models/
-│   │   ├── encoders.py
-│   │   ├── actor.py
-│   │   ├── critic.py
-│   │   └── actor_critic.py
+│   │   ├── encoders.py          ← LSTM / CNN / Transformer
+│   │   ├── actor.py             ← Dirichlet policy head
+│   │   ├── critic.py            ← Value head
+│   │   └── actor_critic.py      ← Model tổng hợp
 │   ├── agents/
-│   │   └── trainer.py
+│   │   └── trainer.py           ← PPO training loop, GAE, rollout
 │   ├── baselines/
-│   │   ├── buy_hold.py
-│   │   ├── markowitz.py
-│   │   └── random_strategy.py
-│   ├── utils/
-│   │   ├── metrics.py
-│   │   ├── plotting.py
-│   │   ├── logger.py
-│   │   └── seed.py
-│   └── inference.py
+│   │   ├── buy_hold.py          ← Buy & Hold Equal Weight
+│   │   ├── markowitz.py         ← Mean-Variance Optimization
+│   │   └── random_strategy.py   ← Random Allocation
+│   └── utils/
+│       ├── metrics.py           ← Sharpe, Sortino, MDD, Calmar...
+│       ├── plotting.py          ← Equity curve, heatmap, drawdown chart
+│       ├── logger.py            ← Logger chuẩn
+│       └── seed.py              ← Reproducibility
+│
 │── outputs/
-│   ├── models/
-│   ├── figures/
-│   └── reports/
-│── train.py
-│── evaluate.py
+│   ├── models/                  ← Checkpoint (.pt) của từng fold
+│   ├── figures/                 ← Biểu đồ PNG
+│   ├── reports/                 ← JSON metrics, walk-forward summary
+│   └── tensorboard/             ← TensorBoard logs
+│
+│── train.py                     ← ⭐ Script huấn luyện chính
+│── evaluate.py                  ← ⭐ Script đánh giá + so sánh baseline
+│── evaluate_all_folds.py        ← Đánh giá toàn bộ 18 fold, chọn best
+│── generate_report.py           ← Tạo báo cáo HTML đẹp
 │── requirements.txt
-│── README.md
+└── README.md
 ```
 
-## 4. Installation
+---
 
-Create a virtual environment, then install dependencies:
+## 4. Cài đặt môi trường
+
+### Yêu cầu
+
+- Python 3.10+
+- CUDA (khuyến nghị) — model tự detect GPU nếu có
+
+### Cài đặt
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Supported market data providers:
+### Kiểm tra GPU
 
-- `yahoo`: US/global equities and ETFs through Yahoo Finance
-- `vnstock`: Vietnam equities, ETFs, and indices through Vnstock
+```bash
+python -c "import torch; print('GPU:', torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A')"
+```
 
-## 5. How To Train
+> 💡 Nếu không có GPU, model vẫn chạy được trên CPU nhưng sẽ chậm hơn ~5–10x.
+
+---
+
+## 5. Cấu hình hệ thống
+
+File config chính: `configs/config.yaml`
+
+Các section quan trọng:
+
+### `data` — Dữ liệu
+
+```yaml
+data:
+  provider: "yahoo"         # "yahoo" hoặc "vnstock"
+  tickers: [AAPL, MSFT, ...]
+  start_date: "2018-01-01"
+  lookback_window: 30       # ⭐ Số ngày lịch sử đầu vào
+  walk_forward:
+    enabled: true
+    train_window: 756       # ~3 năm training
+    val_window: 126         # ~6 tháng validation
+    test_window: 126        # ~6 tháng test
+    step_size: 63           # Bước trượt ~3 tháng
+```
+
+### `environment` — Môi trường RL
+
+```yaml
+environment:
+  initial_cash: 1000000.0
+  fee_rate: 0.001           # Phí giao dịch 0.1%
+  slippage_rate: 0.0005     # Slippage 0.05%
+  lambda_var: 0.5           # Penalty biến động
+  lambda_turnover: 0.01     # Penalty giao dịch nhiều
+  lambda_drawdown: 0.05     # Penalty drawdown
+  lambda_return_bonus: 3.0  # Thưởng lợi nhuận
+  lambda_sharpe_bonus: 0.3  # Thưởng EMA Sharpe
+  lambda_momentum_bonus: 0.1 # Thưởng xu hướng
+  rebalance_frequency: 5    # Rebalance mỗi 5 ngày
+  rebalance_alpha: 0.5      # Tốc độ chuyển vị trí
+```
+
+> ⚠️ **Quan trọng**: Các hệ số lambda được calibrate theo scale log-return (~1e-3). Không nên thay đổi quá nhiều cùng lúc.
+
+### `training` — Huấn luyện PPO
+
+```yaml
+training:
+  total_epochs: 50
+  learning_rate: 0.00005    # LR nhỏ = ổn định hơn
+  gamma: 0.995              # Discount factor cao cho long-horizon
+  clip_epsilon: 0.15        # PPO clip range
+  entropy_coef_start: 0.01  # Exploration ban đầu
+  weight_decay: 0.0001      # Regularization
+  max_grad_norm: 0.5        # Gradient clipping
+```
+
+### Model Selection Score
+
+```python
+# Score dùng để chọn best fold trong walk-forward:
+score = Sharpe + 2.0 × CAGR − 0.5 × |MDD|
+```
+
+---
+
+## 6. Hướng dẫn Huấn luyện
+
+### Huấn luyện cơ bản (US tickers)
 
 ```bash
 python train.py
 ```
 
-Train with the bundled Vietnam configuration:
+### Huấn luyện với dữ liệu Việt Nam
 
 ```bash
 python train.py --config configs/config_vn30.yaml
 ```
 
-Training pipeline:
+### Quy trình huấn luyện tự động
 
-1. Download or load cached market data from the configured provider
-2. Reuse the cached processed dataset when the active data/feature config has not changed
-3. Otherwise build technical indicators and covariance matrices and save them to the processed cache
-4. Split time series into train/validation/test or walk-forward folds
-5. Train PPO-style Actor-Critic
-6. Save checkpoints and TensorBoard logs
-7. Save processed dataset to the configured `processed_dir`
+1. Tải/load cache dữ liệu OHLCV từ Yahoo Finance hoặc Vnstock
+2. Tính toán 27 features kỹ thuật và covariance matrices
+3. Lưu cache vào `data/processed/` (tái sử dụng cho lần sau)
+4. Chạy Walk-Forward: 18 folds × 126 ngày test
+5. Mỗi fold: train PPO → validate → lưu checkpoint tốt nhất
+6. Lưu `outputs/reports/walk_forward_summary.json`
 
-Current default training budget in both bundled configs:
-
-- `total_epochs: 50`
-- `max_rollout_steps_per_fold: 250`
-- Walk-forward training enabled
-
-Data loading notes:
-
-- Raw ticker downloads are cached in the configured `raw_dir`
-- Processed tensors are cached in the configured `processed_dir`
-- Multi-ticker downloads run in parallel via `data.max_workers`
-
-### TensorBoard
+### Theo dõi bằng TensorBoard
 
 ```bash
 tensorboard --logdir outputs/tensorboard
 ```
 
-Tracked logs:
+Các metric được log:
+- `reward/raw_reward` — Raw reward mỗi step
+- `reward/sharpe_bonus` — Thành phần EMA Sharpe bonus
+- `reward/momentum_bonus` — Thành phần momentum
+- `loss/actor_loss`, `loss/critic_loss`
+- `metrics/sharpe_val` — Sharpe trên validation
 
-- Reward
-- Actor loss
-- Critic loss
-- Entropy
-- Validation Sharpe
-- Learning rate
+> 💡 Nếu `reward_sharpe_bonus` chiếm ưu thế quá mức, giảm `lambda_sharpe_bonus` xuống 0.2.
 
-## 6. How To Evaluate
+---
+
+## 7. Hướng dẫn Đánh giá
+
+### Đánh giá tự động (chọn best fold)
 
 ```bash
 python evaluate.py
 ```
 
-Evaluate the Vietnam experiment:
+### Đánh giá một fold cụ thể
 
 ```bash
-python evaluate.py --config configs/config_vn30.yaml
+# Xem danh sách tất cả fold có sẵn
+python evaluate.py --list-folds
+
+# Đánh giá fold 7 (best test return)
+python evaluate.py --fold 7
+
+# Đánh giá fold 16 (beat cả Markowitz + BuyHold)
+python evaluate.py --fold 16
+
+# Đánh giá với config VN30
+python evaluate.py --config configs/config_vn30.yaml --fold 5
 ```
 
-Evaluate only the PPO model without baseline comparisons:
+### Đánh giá chỉ PPO (không so baseline)
 
 ```bash
-python evaluate.py --config configs/config.yaml --rl-only
+python evaluate.py --rl-only
 python evaluate.py --config configs/config_vn30.yaml --rl-only
 ```
 
-Evaluation will:
+### Output của evaluate.py
 
-- Load the saved processed dataset
-- If walk-forward is enabled, automatically select the best completed fold from `outputs/reports/walk_forward_summary.json`
-- If that summary file is not available yet, fall back to the most recently trained fold checkpoint
-- Otherwise load the default checkpoint from `training.checkpoint_path`
-- Backtest on the matching test split for the selected fold
-- Compare against:
-  - Buy and Hold Equal Weight
-  - Mean-Variance Markowitz
-  - Random Allocation
-- Save reports and figures
+- Bảng so sánh: PPO vs BuyHold vs Markowitz vs Random
+- File: `outputs/reports/metrics_summary.json`
+- Biểu đồ: `outputs/figures/us/`
 
-With `--rl-only`, evaluation will:
+---
 
-- Load the trained PPO model
-- Backtest only that model on the test split
-- Save PPO metrics and PPO-only charts without benchmark comparison tables
+## 8. Đánh giá toàn bộ Fold
 
-## 7. Default Tickers
+Script `evaluate_all_folds.py` đánh giá **tất cả 18 fold** trên tập test riêng của từng fold (không phải validation), xếp hạng và chọn best model thực sự.
 
-Configured in `configs/config.yaml`:
+```bash
+# Đánh giá tất cả fold và chọn best
+python evaluate_all_folds.py --set-best
+
+# Chỉ hiển thị top 5
+python evaluate_all_folds.py --top 5
+
+# Dùng config khác
+python evaluate_all_folds.py --config configs/config_vn30.yaml
+```
+
+> ⭐ **Khuyến nghị**: Luôn chạy `evaluate_all_folds.py --set-best` sau khi train xong để chọn model tốt nhất theo test performance thực sự (không phải validation score).
+
+Kết quả lưu vào: `outputs/reports/fold_evaluation.json`
+
+**Composite score** dùng để xếp hạng:
+```
+Test Score = Sharpe + 2 × CAGR − 0.5 × |Max Drawdown|
+```
+
+---
+
+## 9. Tạo báo cáo HTML
+
+```bash
+python generate_report.py
+```
+
+Báo cáo được lưu tại: `outputs/reports/evaluation_report.html`
+
+Mở trực tiếp trong trình duyệt để xem bảng xếp hạng, KPI cards, phân tích best model và so sánh baseline.
+
+---
+
+## 10. Danh sách tài sản mặc định
+
+### US Tickers (`configs/config.yaml`)
 
 ```yaml
 data:
   provider: "yahoo"
   tickers:
-    - AAPL
-    - MSFT
-    - GOOGL
-    - AMZN
-    - TSLA
-    - META
-    - NVDA
-    - JPM
-    - XOM
-    - NFLX
+    - AAPL    # Apple
+    - MSFT    # Microsoft
+    - GOOGL   # Alphabet
+    - AMZN    # Amazon
+    - TSLA    # Tesla
+    - META    # Meta Platforms
+    - NVDA    # NVIDIA
+    - JPM     # JPMorgan Chase
+    - XOM     # ExxonMobil
+    - NFLX    # Netflix
 ```
 
-You can replace or extend this list with any Yahoo Finance tickers.
+Có thể thay/thêm bất kỳ ticker nào hợp lệ trên Yahoo Finance.
 
-## 8. Vietnam Dataset Support
+---
 
-The repository now includes a Vietnam-market configuration at `configs/config_vn30.yaml`.
+## 11. Hỗ trợ thị trường Việt Nam
 
-Default VN sample basket:
+Config: `configs/config_vn30.yaml`
 
 ```yaml
 data:
   provider: "vnstock"
-  vn_source: "VCI"
+  vn_source: "VCI"          # Nguồn dữ liệu (VCI hoặc KBS)
   tickers:
     - FPT
     - VCB
@@ -251,193 +393,202 @@ data:
     - VPB
 ```
 
-Notes:
+**Lưu ý quan trọng:**
+- `vn_source: "VCI"` là nguồn mặc định, giàu dữ liệu nhất
+- Nếu VCI bị block, thử đổi sang `vn_source: "KBS"`
+- Có thể thêm ETF như `E1VFVN30` hoặc index `VNINDEX`, `VN30`
+- Cache riêng biệt: `data/raw_vn30/` và `data/processed_vn30/`
 
-- `vn_source` defaults to `VCI`, which is the richer local data source in the Vnstock docs.
-- You can swap in other Vietnam tickers, ETFs such as `E1VFVN30`, or indices such as `VNINDEX` and `VN30`.
-- The VN config uses separate cache and processed directories: `data/raw_vn30/` and `data/processed_vn30/`.
+Cài đặt thư viện vnstock:
 
-To build a different Vietnam dataset, copy `configs/config_vn30.yaml` and edit only:
+```bash
+pip install vnstock
+```
 
-- `data.tickers`
-- `data.start_date` / `data.end_date`
-- output paths under `data`, `training`, and `evaluation`
+---
 
-## 9. Switching Encoder Type
+## 12. Các chỉ số đánh giá
 
-Update:
+| Chỉ số | Ý nghĩa | Mục tiêu |
+|---|---|---|
+| **Total Return %** | Tổng lợi nhuận | Càng cao càng tốt |
+| **CAGR** | Tăng trưởng kép hàng năm | > 10% |
+| **Sharpe Ratio** | Lợi nhuận / rủi ro | > 1.0 |
+| **Sortino Ratio** | Lợi nhuận / downside risk | > 1.5 |
+| **Max Drawdown** | Sụt giảm tối đa từ đỉnh | < -15% |
+| **Volatility** | Biến động hàng năm | Càng thấp càng tốt |
+| **Calmar Ratio** | CAGR / |MDD| | > 0.5 |
+| **Win Rate** | Tỷ lệ ngày lợi nhuận | > 50% |
+| **Turnover** | Tần suất giao dịch | < 2% |
+| **Avg Holding Period** | Số ngày giữ trung bình | Phụ thuộc chiến lược |
+
+---
+
+## 13. Biểu đồ xuất ra
+
+Lưu tại `outputs/figures/us/` (US) hoặc `outputs/figures/vn30/` (VN):
+
+- `equity_curve_test.png` — Đường tăng trưởng danh mục
+- `drawdown_chart.png` — Biểu đồ drawdown theo thời gian
+- `weight_heatmap.png` — Heatmap phân bổ tài sản
+- `baseline_comparison.png` — So sánh với các chiến lược cơ bản
+- `rolling_sharpe.png` — Sharpe ratio trượt 63 ngày
+- `training_reward_curve.png` — Đường reward trong quá trình train
+- `loss_curve.png` — Actor/Critic loss
+
+---
+
+## 14. Xử lý lỗi thường gặp
+
+### Lỗi tải dữ liệu Yahoo Finance
+
+```bash
+# Xóa cache và tải lại từ đầu
+Remove-Item -Recurse data\raw\*
+python train.py
+```
+
+Kiểm tra:
+- Kết nối internet
+- Ticker hợp lệ trên Yahoo Finance (vd: `AAPL`, không phải `aapl`)
+- Giảm `data.max_workers` nếu bị rate-limit
+
+### Lỗi tải dữ liệu Vnstock
 
 ```yaml
-model:
-  encoder_type: "transformer"
+# Thử đổi nguồn trong config_vn30.yaml
+data:
+  vn_source: "KBS"    # thay vì "VCI"
 ```
 
-Supported values:
-
-- `lstm`
-- `cnn`
-- `transformer`
-
-## 10. Config Highlights
-
-Important sections in `configs/config.yaml`:
-
-- `data`: provider, tickers, dates, split ratios, cache directories
-- `data.max_workers`: parallel download workers for multi-ticker ingestion
-- `features`: feature list, normalization, covariance window
-- `environment`: fee rate, slippage, reward coefficients
-- `model`: encoder type and dimensions
-- `training`: PPO hyperparameters, early stopping, checkpointing, `total_epochs`, and `max_rollout_steps_per_fold`
-- `evaluation`: benchmark settings and report output paths
-
-## 11. Metrics
-
-The evaluation report includes:
-
-1. Total Return %
-2. CAGR
-3. Sharpe Ratio
-4. Sortino Ratio
-5. Max Drawdown
-6. Volatility
-7. Calmar Ratio
-8. Win Rate
-9. Final Portfolio Value
-10. Turnover
-11. Avg Holding Period
-
-## 12. Visualizations
-
-Saved to the configured evaluation figure directory:
-
-- `training_reward_curve.png`
-- `loss_curve.png`
-- `equity_curve_test.png`
-- `drawdown_chart.png`
-- `weight_heatmap.png`
-- `baseline_comparison.png`
-- `rolling_sharpe.png`
-
-Default evaluation figure directories:
-
-- US/global config: `outputs/figures/us/`
-- Vietnam config: `outputs/figures/vn30/`
-
-## 13. Robustness Features
-
-The code handles:
-
-- Yahoo download retries
-- Vnstock download retries
-- Empty or failed ticker downloads
-- Missing values and forward/backward filling
-- NaN indicators
-- Covariance regularization
-- Zero-division protection in metrics
-- Gradient clipping
-- Mixed precision on CUDA
-- Early stopping
-- Checkpoint resume
-
-## 14. Troubleshooting Data Download Errors
-
-If a provider fails for some tickers:
-
-- The loader retries automatically
-- Failed tickers are skipped with logs
-- Raw CSV cache in the configured `raw_dir` reduces repeated requests
-- Processed dataset cache in the configured `processed_dir` reduces repeated feature engineering
-
-If you want a clean data refresh:
-
-1. Delete the corresponding files in the configured `raw_dir`
-2. Run `python train.py` again
-
-If too many Yahoo tickers fail:
-
-- Check internet connectivity
-- Try fewer tickers
-- Make sure ticker symbols are valid on Yahoo Finance
-
-If too many Vietnam tickers fail:
-
-- Check that `data.provider` is `vnstock`
-- Verify ticker codes are valid on HOSE/HNX/UPCoM or as Vietnam indices/ETFs
-- Try switching `vn_source` between `VCI` and `KBS` if your environment blocks one source
-
-## 15. Train / Validation / Test Split
-
-Default split:
-
-- Train: 70%
-- Validation: 15%
-- Test: 15%
-
-No shuffle is used because this is time-series data.
-
-Walk-forward training is enabled in the bundled configs. Each completed fold writes or updates `outputs/reports/walk_forward_summary.json`, which `evaluate.py` uses to pick the best available fold automatically.
-
-## 16. Example Workflow
-
+Xóa cache VN và tải lại:
 ```bash
-pip install -r requirements.txt
-python train.py
-python evaluate.py
-```
-
-Vietnam workflow:
-
-```bash
-pip install -r requirements.txt
+Remove-Item -Recurse data\raw_vn30\*
 python train.py --config configs/config_vn30.yaml
+```
+
+### Lỗi mismatch checkpoint dimension
+
+```
+RuntimeError: size mismatch for portfolio_proj.0.weight
+```
+
+> Nguyên nhân: checkpoint cũ có `portfolio_state_dim=22`, code mới dùng `dim=26`.
+> Giải pháp: Chạy lại `python train.py` để tạo checkpoint mới.
+
+### Lỗi CUDA out of memory
+
+```yaml
+# Giảm batch size trong config.yaml
+training:
+  minibatch_size: 128    # giảm từ 256 xuống 128
+```
+
+---
+
+## 15. Quy trình làm việc đầy đủ
+
+### Quy trình chuẩn (US tickers)
+
+```bash
+# Bước 1: Cài đặt
+pip install -r requirements.txt
+
+# Bước 2: Huấn luyện (tất cả 18 fold)
+python train.py
+
+# Bước 3: Đánh giá toàn bộ fold, chọn best
+python evaluate_all_folds.py --set-best
+
+# Bước 4: Đánh giá chi tiết best fold
+python evaluate.py
+
+# Bước 5: Xem đánh giá fold cụ thể
+python evaluate.py --list-folds
+python evaluate.py --fold 7
+
+# Bước 6 (tuỳ chọn): Tạo báo cáo HTML
+python generate_report.py
+
+# Bước 7 (tuỳ chọn): Theo dõi training
+tensorboard --logdir outputs/tensorboard
+```
+
+### Quy trình thị trường Việt Nam
+
+```bash
+pip install -r requirements.txt
+pip install vnstock
+
+python train.py --config configs/config_vn30.yaml
+python evaluate_all_folds.py --config configs/config_vn30.yaml --set-best
 python evaluate.py --config configs/config_vn30.yaml
 ```
 
-Two-dataset PPO-only evaluation workflow:
+### Quy trình đánh giá hai dataset
 
 ```bash
+# Dataset 1: US
 python train.py --config configs/config.yaml
-python evaluate.py --config configs/config.yaml --rl-only
+python evaluate_all_folds.py --set-best
+python evaluate.py --fold 7
 
+# Dataset 2: VN30
 python train.py --config configs/config_vn30.yaml
-python evaluate.py --config configs/config_vn30.yaml --rl-only
+python evaluate_all_folds.py --config configs/config_vn30.yaml --set-best
+python evaluate.py --config configs/config_vn30.yaml
+
+# Tạo báo cáo tổng hợp
+python generate_report.py
 ```
 
-This gives you a clean evaluation section for the two datasets:
+---
 
-- US/global dataset: metrics in `outputs/reports/metrics_summary.json`
-- Vietnam dataset: metrics in `outputs/reports/metrics_summary_vn30.json`
-- Separate PPO charts in `outputs/figures/us/` and `outputs/figures/vn30/`
-
-Expected artifacts:
-
-- Model checkpoints in `outputs/models/`
-- Processed arrays in `data/processed/`
-- TensorBoard logs in `outputs/tensorboard/`
-- Walk-forward fold summary in `outputs/reports/walk_forward_summary.json`
-- Comparison CSV / JSON in `outputs/reports/`
-- Charts in `outputs/figures/`
-
-## 17. Notes On Production Use
-
-This project is built to be clean, modular, and reproducible for research and extension. For live deployment, you would typically add:
-
-- Broker execution adapters
-- Live risk constraints
-- Intraday data ingestion
-- More advanced transaction-cost models
-- Regime filters and macro signals
-- Hyperparameter sweeps
-
-## 18. Command Summary
+## 16. Tóm tắt lệnh
 
 ```bash
-python train.py
-python evaluate.py
-python train.py --config configs/config_vn30.yaml
-python evaluate.py --config configs/config_vn30.yaml
-python evaluate.py --config configs/config.yaml --rl-only
-python evaluate.py --config configs/config_vn30.yaml --rl-only
+# ── CÀI ĐẶT ──────────────────────────────────────────────────────────────
+pip install -r requirements.txt
+pip install vnstock                          # Chỉ cần nếu dùng thị trường VN
+
+# ── HUẤN LUYỆN ───────────────────────────────────────────────────────────
+python train.py                              # US tickers (mặc định)
+python train.py --config configs/config_vn30.yaml   # Thị trường VN
+
+# ── ĐÁNH GIÁ ─────────────────────────────────────────────────────────────
+python evaluate.py                           # Đánh giá best fold tự động
+python evaluate.py --list-folds              # Xem danh sách tất cả fold
+python evaluate.py --fold 7                  # Đánh giá fold 7
+python evaluate.py --fold 16                 # Đánh giá fold 16 (khuyến nghị)
+python evaluate.py --rl-only                 # Chỉ PPO, không so baseline
+python evaluate.py --config configs/config_vn30.yaml --fold 5
+
+# ── ĐÁNH GIÁ TOÀN BỘ FOLD ────────────────────────────────────────────────
+python evaluate_all_folds.py                 # Đánh giá tất cả 18 fold
+python evaluate_all_folds.py --set-best      # Tự động chọn và set best fold
+python evaluate_all_folds.py --top 5         # Chỉ hiển thị top 5
+
+# ── BÁO CÁO ──────────────────────────────────────────────────────────────
+python generate_report.py                    # Tạo báo cáo HTML tại outputs/reports/
+
+# ── TENSORBOARD ──────────────────────────────────────────────────────────
+tensorboard --logdir outputs/tensorboard     # Theo dõi training real-time
+
+# ── LÀM SẠCH CACHE ───────────────────────────────────────────────────────
+Remove-Item -Recurse data\raw\*              # Xóa cache raw US
+Remove-Item -Recurse data\processed\*        # Xóa cache processed US
+Remove-Item -Recurse data\raw_vn30\*         # Xóa cache raw VN
+Remove-Item -Recurse data\processed_vn30\*   # Xóa cache processed VN
 ```
 
-That is enough to run the end-to-end research pipeline after installing dependencies.
+---
+
+## Ghi chú kỹ thuật quan trọng
+
+> ⭐ **Walk-Forward Selection**: Sau khi train, chạy `evaluate_all_folds.py --set-best` để chọn best model dựa trên *test performance* thực sự (không phải validation score). Điều này tránh selection bias.
+
+> ⚠️ **Không dùng `use_cache: true` khi thay đổi `features.include_columns`**. Phải xóa `data/processed/` để feature engineering chạy lại.
+
+> 💡 **Về hiệu suất mô hình**: PPO thua Random Allocation trong giai đoạn bull market cực mạnh là bình thường. Điểm mạnh của PPO nằm ở **risk-adjusted return** (Sharpe, Calmar), không phải absolute return.
+
+> ⚙️ **Thay đổi số lượng tài sản**: Khi thêm/bớt ticker, phải xóa toàn bộ checkpoint cũ và train lại từ đầu vì `n_assets` ảnh hưởng đến kích thước model.

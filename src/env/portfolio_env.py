@@ -56,6 +56,18 @@ class RollingMoments:
         self.sum += value
         self.sum_sq += value * value
 
+    def mean(self) -> float:
+        if not self.values:
+            return 0.0
+        return self.sum / len(self.values)
+
+    def std(self) -> float:
+        if len(self.values) < 2:
+            return 1e-8
+        n = len(self.values)
+        variance = max(self.sum_sq / n - (self.sum / n) ** 2, 0.0)
+        return float(np.sqrt(max(variance, 1e-8)))
+
     def projected_mean_std(self, value: float) -> tuple[float, float]:
         count = len(self.values) + 1
         total = self.sum + value
@@ -66,7 +78,7 @@ class RollingMoments:
 
 
 class PortfolioEnv:
-    """A simple multi-asset portfolio environment with weight actions."""
+    """Multi-asset portfolio environment with improved reward function."""
 
     def __init__(
         self,
@@ -140,8 +152,21 @@ class PortfolioEnv:
         self.current_weights = np.zeros(self.action_dim, dtype=np.float32)
         self.prev_weights = self.current_weights.copy()
         self.current_weights[-1] = 1.0
-        self.portfolio_state_dim = self.action_dim * 2 if self.include_prev_weights else self.action_dim
+
+        # Portfolio state: weights + prev_weights + 4 extra context signals
+        # [rolling_vol, rolling_sharpe, current_drawdown, trend_signal]
+        _base_dim = self.action_dim * 2 if self.include_prev_weights else self.action_dim
+        self.portfolio_state_dim = _base_dim + 4
+
         self.recent_net_returns = RollingMoments(self.sharpe_window)
+        self.rolling_vol_window = RollingMoments(self.sharpe_window)
+
+        # EMA for smooth Sharpe bonus (alpha = 2 / (window+1))
+        self._ema_alpha = 2.0 / (self.sharpe_window + 1)
+        self._ema_return = 0.0
+        self._ema_sq_return = 0.0
+        self._ema_initialized = False
+
         self.momentum_return_cumsum = np.concatenate(
             [np.zeros((1, self.n_assets), dtype=np.float32), np.cumsum(self.returns, axis=0, dtype=np.float32)],
             axis=0,
@@ -165,6 +190,10 @@ class PortfolioEnv:
         self.reward_history = []
         self.info_history = []
         self.recent_net_returns.reset()
+        self.rolling_vol_window.reset()
+        self._ema_return = 0.0
+        self._ema_sq_return = 0.0
+        self._ema_initialized = False
         return self._get_state()
 
     def step(self, action: np.ndarray) -> tuple[dict[str, np.ndarray], float, bool, dict[str, Any]]:
@@ -193,6 +222,12 @@ class PortfolioEnv:
         self.portfolio_value *= net_growth
         self.peak_value = max(self.peak_value, self.portfolio_value)
         drawdown = float(1.0 - self.portfolio_value / max(self.peak_value, 1e-8))
+
+        # Update rolling trackers
+        self.recent_net_returns.append(net_return)
+        self.rolling_vol_window.append(net_return)
+        self._update_ema(net_return)
+
         reward, reward_terms = self._compute_reward(
             asset_weights=asset_weights,
             net_return=net_return,
@@ -200,7 +235,6 @@ class PortfolioEnv:
             variance=variance,
             drawdown=drawdown,
         )
-        self.recent_net_returns.append(net_return)
 
         self.current_weights = weights
         self.current_step += 1
@@ -237,6 +271,27 @@ class PortfolioEnv:
         next_state = self._get_state()
         return next_state, reward, done, self._info_to_dict(info)
 
+    def _update_ema(self, net_return: float) -> None:
+        """Update EMA statistics for smooth Sharpe bonus computation."""
+        a = self._ema_alpha
+        if not self._ema_initialized:
+            self._ema_return = net_return
+            self._ema_sq_return = net_return * net_return
+            self._ema_initialized = True
+        else:
+            self._ema_return = a * net_return + (1 - a) * self._ema_return
+            self._ema_sq_return = a * net_return * net_return + (1 - a) * self._ema_sq_return
+
+    def _get_ema_sharpe(self) -> float:
+        """Compute annualized Sharpe ratio from EMA statistics."""
+        if not self._ema_initialized:
+            return 0.0
+        ema_var = max(self._ema_sq_return - self._ema_return ** 2, 1e-10)
+        ema_std = float(np.sqrt(ema_var))
+        sharpe = self._ema_return / max(ema_std, 1e-8)
+        # Annualize (sqrt(252) daily → annualized)
+        return float(np.clip(sharpe * np.sqrt(252), -5.0, 5.0))
+
     def _compute_reward(
         self,
         asset_weights: np.ndarray,
@@ -245,17 +300,34 @@ class PortfolioEnv:
         variance: float,
         drawdown: float,
     ) -> tuple[float, dict[str, float]]:
-        safe_return = float(np.clip(net_return, -0.95, None))
-        reward_log_term = float(np.log1p(safe_return))
-        reward_return_bonus = float(self.lambda_return_bonus * max(net_return - self.return_target, 0.0))
-        reward_sharpe_bonus = self._compute_sharpe_bonus(net_return)
-        reward_momentum_bonus = self._compute_momentum_bonus(asset_weights)
-        penalty_variance = float(self.lambda_var * max(variance, 0.0))
+        # ── BASE: log(1+r) — proper for portfolio compounding ──────────────────
+        log_return = float(np.log1p(np.clip(net_return, -0.95, None)))
+
+        # ── PENALTIES ──────────────────────────────────────────────────────────
+        # Variance penalty: downside only (don't penalize upside vol)
+        is_downside = 1.0 if net_return < 0.0 else 0.0
+        penalty_variance = float(self.lambda_var * variance * is_downside)
+
+        # Turnover penalty: small but nonzero to discourage noise trading
         penalty_turnover = float(self.lambda_turnover * max(turnover, 0.0))
+
+        # Drawdown penalty: activates above threshold with power scaling
         dd_excess = max(drawdown - self.drawdown_penalty_threshold, 0.0)
         penalty_drawdown = float(self.lambda_drawdown * (dd_excess ** self.drawdown_penalty_power))
+
+        # ── BONUSES ────────────────────────────────────────────────────────────
+        # Return bonus: asymmetric — reward only positive excess return
+        reward_return_bonus = float(self.lambda_return_bonus * max(net_return - self.return_target, 0.0))
+
+        # Sharpe bonus: EMA-based (smooth, lag-free, annualized)
+        reward_sharpe_bonus = self._compute_sharpe_bonus_ema()
+
+        # Momentum bonus: rewards aligning weights with recent asset trends
+        reward_momentum_bonus = self._compute_momentum_bonus(asset_weights)
+
+        # ── COMBINE & CLIP ─────────────────────────────────────────────────────
         reward = (
-            reward_log_term
+            log_return
             + reward_return_bonus
             + reward_sharpe_bonus
             + reward_momentum_bonus
@@ -263,9 +335,11 @@ class PortfolioEnv:
             - penalty_turnover
             - penalty_drawdown
         )
-        reward = float(np.nan_to_num(reward, nan=-1.0, posinf=1.0, neginf=-1.0))
+        # Clip to prevent extreme values from dominating gradient
+        reward = float(np.clip(np.nan_to_num(reward, nan=-0.1, posinf=0.1, neginf=-0.1), -0.1, 0.1))
+
         reward_terms = {
-            "reward_log_term": reward_log_term,
+            "reward_log_term": log_return,
             "reward_return_bonus": reward_return_bonus,
             "reward_sharpe_bonus": reward_sharpe_bonus,
             "reward_momentum_bonus": reward_momentum_bonus,
@@ -275,7 +349,16 @@ class PortfolioEnv:
         }
         return reward, reward_terms
 
+    def _compute_sharpe_bonus_ema(self) -> float:
+        """Smooth EMA-based Sharpe bonus — avoids the noise of rolling window."""
+        if self.lambda_sharpe_bonus <= 0.0 or not self._ema_initialized:
+            return 0.0
+        annualized_sharpe = self._get_ema_sharpe()
+        # tanh maps to [-1, 1]; divide by 3 so tanh saturates near Sharpe=3
+        return float(self.lambda_sharpe_bonus * np.tanh(annualized_sharpe / 3.0))
+
     def _compute_sharpe_bonus(self, net_return: float) -> float:
+        """Legacy rolling-window Sharpe bonus (kept for compatibility)."""
         if self.lambda_sharpe_bonus <= 0.0:
             return 0.0
         if len(self.recent_net_returns.values) + 1 < 5:
@@ -285,6 +368,7 @@ class PortfolioEnv:
         return float(self.lambda_sharpe_bonus * np.tanh(sharpe))
 
     def _compute_momentum_bonus(self, asset_weights: np.ndarray) -> float:
+        """Reward aligning portfolio weights with recent asset momentum."""
         if self.lambda_momentum_bonus <= 0.0:
             return 0.0
         start = max(self.start_index, self.current_step - self.momentum_window + 1)
@@ -315,10 +399,35 @@ class PortfolioEnv:
         start = self.current_step - self.lookback_window
         end = self.current_step
         market_window = self.features[start:end]
+
+        # Base portfolio state: current + previous weights
         if self.include_prev_weights:
-            portfolio_state = np.concatenate([self.current_weights, self.prev_weights], axis=0)
+            base_state = np.concatenate([self.current_weights, self.prev_weights], axis=0)
         else:
-            portfolio_state = self.current_weights.copy()
+            base_state = self.current_weights.copy()
+
+        # ── Extra context signals (4 scalars) ─────────────────────────────────
+        # 1. Rolling volatility (normalized to daily std scale, ~1%)
+        rolling_vol = float(self.rolling_vol_window.std()) * 100.0  # scale to ~[0, 5]
+
+        # 2. Rolling Sharpe (EMA-based, annualized, clipped)
+        rolling_sharpe = float(np.clip(self._get_ema_sharpe() / 5.0, -1.0, 1.0))  # scale to [-1, 1]
+
+        # 3. Current drawdown (already in [0, 1], negate so less is better)
+        current_drawdown = float(1.0 - self.portfolio_value / max(self.peak_value, 1e-8))
+
+        # 4. Trend signal: recent mean market return across assets (scaled)
+        window = min(5, max(1, self.current_step - self.start_index))
+        trend_start = max(0, self.current_step - window)
+        trend_signal = float(np.mean(self.returns[trend_start:self.current_step])) * 100.0
+
+        extra_signals = np.array(
+            [rolling_vol, rolling_sharpe, current_drawdown, trend_signal],
+            dtype=np.float32,
+        )
+        extra_signals = np.nan_to_num(extra_signals, nan=0.0, posinf=1.0, neginf=-1.0)
+
+        portfolio_state = np.concatenate([base_state, extra_signals], axis=0)
         return {
             "market": market_window,
             "portfolio": portfolio_state,

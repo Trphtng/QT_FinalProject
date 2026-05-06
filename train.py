@@ -128,7 +128,9 @@ def main() -> None:
         history = trainer.train()
         final_history = history
         val_metrics = trainer.evaluate_env(val_env)
-        score = float(val_metrics["Sharpe Ratio"] - 0.5 * abs(val_metrics["Max Drawdown"]))
+        # Score = Sharpe + CAGR contribution - drawdown penalty
+        # Sharpe measures risk-adjusted return, CAGR measures profitability
+        score = float(val_metrics["Sharpe Ratio"] + 2.0 * val_metrics["CAGR"] - 0.5 * abs(val_metrics["Max Drawdown"]))
         all_fold_metrics.append(
             {
                 "fold": float(fold_idx + 1),

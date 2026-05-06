@@ -63,6 +63,8 @@ features:
     - Volatility20
     - RealizedVol20
     - Momentum20
+    - DownsideVol20
+    - TrendSlope20
     - RollingCorrMarket20
     - DrawdownLocalPeak
   normalize_features: true
@@ -77,29 +79,33 @@ environment:
   fee_rate: 0.001
   slippage_rate: 0.0005
   kappa: 1.0
-  lambda_var: 0.1
-  lambda_turnover: 0.015
-  lambda_drawdown: 0.04
+  # Penalty coefficients — calibrated to daily log-return scale (~1e-3)
+  lambda_var: 0.5          # Downside variance penalty (mild)
+  lambda_turnover: 0.01    # Turnover penalty (discourage noise trading)
+  lambda_drawdown: 0.05    # Drawdown penalty above threshold
   drawdown_penalty_threshold: 0.08
   drawdown_penalty_power: 1.5
-  lambda_return_bonus: 0.6
-  lambda_sharpe_bonus: 0.15
+  # Bonus coefficients
+  lambda_return_bonus: 3.0   # Reward positive excess returns
+  lambda_sharpe_bonus: 0.3   # EMA-based smooth Sharpe bonus
   sharpe_window: 20
-  lambda_momentum_bonus: 0.10
+  lambda_momentum_bonus: 0.1  # Trend-following bonus (re-enabled)
   momentum_window: 20
   momentum_scale: 50.0
   return_target: 0.0
   reward_mode: "log_return"
+  # Rebalancing: every 5 days with partial execution (smoother)
   rebalance_frequency: 5
-  rebalance_alpha: 0.25
+  rebalance_alpha: 0.5
   risk_free_rate: 0.0
   action_mode: "weights"
+  include_prev_weights: true
 
 model:
   encoder_type: "transformer"
   hidden_dim: 128
   num_layers: 2
-  dropout: 0.1
+  dropout: 0.2
   cnn_channels: 64
   lstm_layers: 2
   transformer_heads: 4
@@ -113,15 +119,18 @@ training:
   rollout_epochs: 1
   ppo_epochs: 12
   minibatch_size: 256
-  gamma: 0.997
-  gae_lambda: 0.97
-  clip_epsilon: 0.12
+  # PPO core hyperparameters
+  gamma: 0.995          # Higher discount for long-horizon portfolio returns
+  gae_lambda: 0.95      # Standard GAE lambda
+  clip_epsilon: 0.15    # Clip range for PPO ratio
   value_loss_coef: 0.5
+  # Entropy: start high for exploration, decay slowly
   entropy_coef_start: 0.01
-  entropy_coef_end: 0.003
-  learning_rate: 0.0001
-  weight_decay: 0.00001
-  max_grad_norm: 0.5
+  entropy_coef_end: 0.001
+  # Learning: small LR, high weight decay for regularization
+  learning_rate: 0.00005
+  weight_decay: 0.0001
+  max_grad_norm: 0.5    # Gradient clipping
   lr_scheduler_patience: 12
   lr_scheduler_factor: 0.5
   early_stopping_patience: 30
@@ -136,3 +145,4 @@ evaluation:
   report_path: "outputs/reports/metrics_summary.json"
   comparison_csv: "outputs/reports/baseline_comparison.csv"
   figure_dir: "outputs/figures/us"
+  walk_forward_summary_path: "outputs/reports/walk_forward_summary.json"

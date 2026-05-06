@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 from torch import nn
 
@@ -55,6 +57,30 @@ class CNN1DEncoder(BaseEncoder):
         return self.net(x)
 
 
+class PositionalEncoding(nn.Module):
+    """Inject some information about the relative or absolute position of the tokens in the sequence."""
+
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 1000):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, 1, d_model)
+        pe[:, 0, 0::2] = torch.sin(position * div_term)
+        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Arguments:
+            x: Tensor, shape ``[batch_size, seq_len, embedding_dim]``
+        """
+        # transpose pe from [max_len, 1, d_model] to [1, max_len, d_model] for broadcasting
+        x = x + self.pe[:x.size(1)].transpose(0, 1)
+        return self.dropout(x)
+
+
 class TransformerEncoderModel(BaseEncoder):
     def __init__(
         self,
@@ -68,6 +94,7 @@ class TransformerEncoderModel(BaseEncoder):
     ) -> None:
         super().__init__(input_dim, hidden_dim, n_assets)
         self.input_proj = nn.Linear(input_dim * n_assets, hidden_dim)
+        self.pos_encoder = PositionalEncoding(hidden_dim, dropout)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=hidden_dim,
             nhead=num_heads,
@@ -77,13 +104,14 @@ class TransformerEncoderModel(BaseEncoder):
             batch_first=True,
             norm_first=True,
         )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers, enable_nested_tensor=False)
         self.norm = nn.LayerNorm(hidden_dim)
 
     def forward(self, market: torch.Tensor) -> torch.Tensor:
         batch, seq_len, n_assets, n_features = market.shape
         x = market.reshape(batch, seq_len, n_assets * n_features)
         x = self.input_proj(x)
+        x = self.pos_encoder(x)
         x = self.encoder(x)
         return self.norm(x[:, -1, :])
 

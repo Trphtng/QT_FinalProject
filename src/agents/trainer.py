@@ -125,6 +125,8 @@ class PPOTrainer:
             "mean_penalty_variance": [],
             "mean_reward_sharpe_bonus": [],
             "mean_reward_momentum_bonus": [],
+            "mean_cash_weight": [],
+            "mean_asset_weight_std": [],
         }
 
         resume_from = cfg.get("resume_from")
@@ -172,6 +174,8 @@ class PPOTrainer:
             self.history["mean_penalty_variance"].append(rollout_diag["mean_penalty_variance"])
             self.history["mean_reward_sharpe_bonus"].append(rollout_diag["mean_reward_sharpe_bonus"])
             self.history["mean_reward_momentum_bonus"].append(rollout_diag["mean_reward_momentum_bonus"])
+            self.history["mean_cash_weight"].append(rollout_diag["mean_cash_weight"])
+            self.history["mean_asset_weight_std"].append(rollout_diag["mean_asset_weight_std"])
 
             current_lr = self.optimizer.param_groups[0]["lr"]
             LOGGER.info(
@@ -197,6 +201,11 @@ class PPOTrainer:
                 rollout_diag["mean_turnover"],
                 rollout_diag["mean_drawdown"],
                 rollout_diag["mean_variance"],
+            )
+            LOGGER.info(
+                "CashWt %.4f | AssetWtStd %.4f",
+                rollout_diag["mean_cash_weight"],
+                rollout_diag["mean_asset_weight_std"],
             )
             LOGGER.info(
                 "RLog %.6f | RBonus %.6f | RSharpe %.6f | RMomo %.6f | PTurn %.6f | PDD %.6f | PVar %.6f",
@@ -233,6 +242,8 @@ class PPOTrainer:
             self.writer.add_scalar("train/mean_penalty_turnover", rollout_diag["mean_penalty_turnover"], epoch)
             self.writer.add_scalar("train/mean_penalty_drawdown", rollout_diag["mean_penalty_drawdown"], epoch)
             self.writer.add_scalar("train/mean_penalty_variance", rollout_diag["mean_penalty_variance"], epoch)
+            self.writer.add_scalar("train/mean_cash_weight", rollout_diag["mean_cash_weight"], epoch)
+            self.writer.add_scalar("train/mean_asset_weight_std", rollout_diag["mean_asset_weight_std"], epoch)
 
             if score > self.best_score:
                 self.best_score = score
@@ -280,6 +291,8 @@ class PPOTrainer:
         penalty_variance_sum = 0.0
         reward_sharpe_bonus_sum = 0.0
         reward_momentum_bonus_sum = 0.0
+        cash_weight_sum = 0.0
+        asset_weight_std_sum = 0.0
 
         done = False
         step_count = 0
@@ -306,6 +319,8 @@ class PPOTrainer:
             penalty_variance_sum += float(info.get("penalty_variance", 0.0))
             reward_sharpe_bonus_sum += float(info.get("reward_sharpe_bonus", 0.0))
             reward_momentum_bonus_sum += float(info.get("reward_momentum_bonus", 0.0))
+            cash_weight_sum += float(info.get("cash_weight", 0.0))
+            asset_weight_std_sum += float(np.std(info.get("weights", np.zeros(1))[:-1]))
 
             market_batch[step_count] = state["market"]
             portfolio_batch[step_count] = state["portfolio"]
@@ -345,6 +360,8 @@ class PPOTrainer:
             "mean_penalty_variance": penalty_variance_sum / denom,
             "mean_reward_sharpe_bonus": reward_sharpe_bonus_sum / denom,
             "mean_reward_momentum_bonus": reward_momentum_bonus_sum / denom,
+            "mean_cash_weight": cash_weight_sum / denom,
+            "mean_asset_weight_std": asset_weight_std_sum / denom,
         }
 
         return RolloutBatch(

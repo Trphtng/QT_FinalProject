@@ -63,6 +63,8 @@ features:
     - Volatility20
     - RealizedVol20
     - Momentum20
+    - DownsideVol20
+    - TrendSlope20
     - RollingCorrMarket20
     - DrawdownLocalPeak
   normalize_features: true
@@ -77,29 +79,30 @@ environment:
   fee_rate: 0.001
   slippage_rate: 0.0005
   kappa: 1.0
-  lambda_var: 0.1
-  lambda_turnover: 0.015
-  lambda_drawdown: 0.04
+  lambda_var: 0.5
+  lambda_turnover: 0.01
+  lambda_drawdown: 0.05
   drawdown_penalty_threshold: 0.08
   drawdown_penalty_power: 1.5
-  lambda_return_bonus: 0.6
-  lambda_sharpe_bonus: 0.15
+  lambda_return_bonus: 3.0
+  lambda_sharpe_bonus: 0.3
   sharpe_window: 20
-  lambda_momentum_bonus: 0.10
+  lambda_momentum_bonus: 0.1
   momentum_window: 20
   momentum_scale: 50.0
   return_target: 0.0
   reward_mode: "log_return"
   rebalance_frequency: 5
-  rebalance_alpha: 0.25
+  rebalance_alpha: 0.5
   risk_free_rate: 0.0
   action_mode: "weights"
+  include_prev_weights: true
 
 model:
   encoder_type: "transformer"
   hidden_dim: 128
   num_layers: 2
-  dropout: 0.1
+  dropout: 0.2
   cnn_channels: 64
   lstm_layers: 2
   transformer_heads: 4
@@ -117,10 +120,10 @@ training:
   gae_lambda: 0.97
   clip_epsilon: 0.12
   value_loss_coef: 0.5
-  entropy_coef_start: 0.01
-  entropy_coef_end: 0.003
-  learning_rate: 0.0001
-  weight_decay: 0.00001
+  entropy_coef_start: 0.005
+  entropy_coef_end: 0.001
+  learning_rate: 0.00005
+  weight_decay: 0.0001
   max_grad_norm: 0.5
   lr_scheduler_patience: 12
   lr_scheduler_factor: 0.5
