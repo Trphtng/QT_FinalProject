@@ -60,6 +60,7 @@ def generate_html(
     fold_data: list[dict],
     metrics_data: dict | None,
     wf_data: list[dict] | None,
+    metrics_vn30: dict | None = None,
 ) -> str:
 
     # Sort fold_data by fold number for the walk-forward section
@@ -213,9 +214,9 @@ def generate_html(
             <th>Return %</th>
             <th>CAGR</th>
             <th>Sharpe</th>
-            <th>Sortino</th>
             <th>MDD</th>
             <th>Calmar</th>
+            <th>Volatility</th>
             <th>Win Rate</th>
             <th>Turnover</th>
             <th>BH Sharpe</th>
@@ -241,9 +242,9 @@ def generate_html(
             <td>{color_val(r['ppo_return'], fmt='+.2f')}</td>
             <td>{color_val(r['ppo_cagr'], fmt='+.3f')}</td>
             <td>{color_val(r['ppo_sharpe'], fmt='+.3f')}</td>
-            <td>—</td>
             <td>{color_val(r['ppo_mdd'], good_positive=False, fmt='+.3f')}</td>
             <td>{color_val(r['ppo_calmar'], fmt='+.2f')}</td>
+            <td>{r['ppo_vol']:.4f}</td>
             <td>{r['ppo_winrate']:.2f}</td>
             <td>{r['ppo_turnover']:.4f}</td>
             <td>{r['bh_sharpe']:+.3f}</td>
@@ -261,10 +262,9 @@ def generate_html(
             <td>{color_val(statistics.mean(all_returns), fmt='+.2f')}</td>
             <td>—</td>
             <td>{color_val(statistics.mean(all_sharpes), fmt='+.3f')}</td>
-            <td>—</td>
             <td>{color_val(statistics.mean(all_mdds), good_positive=False, fmt='+.3f')}</td>
             <td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>
-            <td colspan="4"></td>
+            <td colspan="5"></td>
           </tr>
         </tbody>
       </table>
@@ -285,6 +285,7 @@ def generate_html(
             <th>Sharpe</th>
             <th>MDD</th>
             <th>Calmar</th>
+            <th>Volatility</th>
             <th>Win Rate</th>
             <th>Turnover</th>
             <th>BH Sharpe</th>
@@ -308,6 +309,7 @@ def generate_html(
             <td>{color_val(r['ppo_sharpe'], fmt='+.3f')}</td>
             <td>{color_val(r['ppo_mdd'], good_positive=False, fmt='+.3f')}</td>
             <td>{color_val(r['ppo_calmar'], fmt='+.2f')}</td>
+            <td>{r['ppo_vol']:.4f}</td>
             <td>{r['ppo_winrate']:.2f}</td>
             <td>{r['ppo_turnover']:.4f}</td>
             <td>{r['bh_sharpe']:+.3f}</td>
@@ -323,82 +325,49 @@ def generate_html(
     </div>
   </div>"""
 
-    # ── Section 4: Best model card ──
-    html += f"""
-  <div class="section">
-    <div class="section-title">⭐ Best Model Detail — Fold {best['fold']}</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem">
-      <div class="best-card">
-        <h3>PPO Actor-Critic Performance</h3>
-        <div class="metric-row"><span class="metric-key">Total Return</span><span>{color_val(best['ppo_return'], fmt='+.4f')}</span></div>
-        <div class="metric-row"><span class="metric-key">CAGR</span><span>{color_val(best['ppo_cagr'], fmt='+.4f')}</span></div>
-        <div class="metric-row"><span class="metric-key">Sharpe Ratio</span><span>{color_val(best['ppo_sharpe'], fmt='+.4f')}</span></div>
-        <div class="metric-row"><span class="metric-key">Max Drawdown</span><span>{color_val(best['ppo_mdd'], good_positive=False, fmt='+.4f')}</span></div>
-        <div class="metric-row"><span class="metric-key">Calmar Ratio</span><span>{color_val(best['ppo_calmar'], fmt='+.4f')}</span></div>
-        <div class="metric-row"><span class="metric-key">Win Rate</span><span>{best['ppo_winrate']:.4f}</span></div>
-        <div class="metric-row"><span class="metric-key">Volatility</span><span>{best['ppo_vol']:.4f}</span></div>
-        <div class="metric-row"><span class="metric-key">Turnover</span><span>{best['ppo_turnover']:.4f}</span></div>
-        <div class="metric-row"><span class="metric-key">Test Period</span><span>step {best['test_start']} → {best['test_end']} ({best['test_days']} days)</span></div>
-        <div class="metric-row"><span class="metric-key">Checkpoint</span><span style="font-size:.8rem;color:#94a3b8">{Path(best['ckpt_path']).name}</span></div>
-      </div>
-      <div class="best-card">
-        <h3>Baseline Comparison</h3>
-        <div class="metric-row"><span class="metric-key">PPO Sharpe</span><span>{color_val(best['ppo_sharpe'], fmt='+.4f')}</span></div>
-        <div class="metric-row"><span class="metric-key">Buy &amp; Hold Sharpe</span><span>{best['bh_sharpe']:+.4f}</span></div>
-        <div class="metric-row"><span class="metric-key">Markowitz Sharpe</span><span>{best['mz_sharpe']:+.4f}</span></div>
-        <div class="metric-row"><span class="metric-key">PPO Return</span><span>{color_val(best['ppo_return'], fmt='+.2f')}</span></div>
-        <div class="metric-row"><span class="metric-key">Buy &amp; Hold Return</span><span>{best['bh_return']:+.2f}</span></div>
-        <div class="metric-row"><span class="metric-key">Markowitz Return</span><span>{best['mz_return']:+.2f}</span></div>
-        <div class="metric-row"><span class="metric-key">PPO vs Markowitz</span><span>{'<span style="color:#22c55e;font-weight:700">✓ PPO WINS</span>' if best['beats_markowitz'] else '<span style="color:#f87171;font-weight:700">✗ PPO LOSES</span>'}</span></div>
-        <div class="metric-row"><span class="metric-key">PPO vs Buy &amp; Hold</span><span>{'<span style="color:#22c55e;font-weight:700">✓ PPO WINS</span>' if best['beats_buyhold'] else '<span style="color:#f87171;font-weight:700">✗ PPO LOSES</span>'}</span></div>
-        <div class="metric-row"><span class="metric-key">Composite Test Score</span><span style="font-size:1.2rem;font-weight:800;color:#f59e0b">{best['test_score']:+.4f}</span></div>
-      </div>
-    </div>
-  </div>"""
+    # (Section 4 removed — Best Model Detail)
 
-    # ── Section 5: Final evaluation (metrics_summary.json) if available ──
-    if metrics_data:
-        html += """
-  <div class="section">
-    <div class="section-title">📋 Final Evaluation — Selected Model vs Baselines</div>
-    <div class="table-wrap">
-      <table class="comp-table">
-        <thead>
-          <tr>
-            <th>Strategy</th>
-            <th>Total Return %</th>
-            <th>CAGR</th>
-            <th>Sharpe</th>
-            <th>Sortino</th>
-            <th>MDD</th>
-            <th>Volatility</th>
-            <th>Calmar</th>
-            <th>Win Rate</th>
-            <th>Turnover</th>
-          </tr>
-        </thead>
-        <tbody>"""
-        for strategy, m in metrics_data.items():
+    # ── Section 4: US Dataset evaluation ──
+    def _metrics_table(data: dict, title: str) -> str:
+        rows = ""
+        for strategy, m in data.items():
             is_ppo = strategy == "PPO Actor-Critic"
             row_class = 'class="highlight"' if is_ppo else ""
-            html += f"""
+            rows += f"""
           <tr {row_class}>
             <td style="text-align:left;font-weight:{'700' if is_ppo else '400'}">{strategy}</td>
             <td>{color_val(m.get('Total Return %', 0), fmt='+.4f')}</td>
             <td>{color_val(m.get('CAGR', 0), fmt='+.4f')}</td>
             <td>{color_val(m.get('Sharpe Ratio', 0), fmt='+.4f')}</td>
-            <td>{color_val(m.get('Sortino Ratio', 0), fmt='+.4f')}</td>
             <td>{color_val(m.get('Max Drawdown', 0), good_positive=False, fmt='+.4f')}</td>
             <td>{m.get('Volatility', 0):.4f}</td>
             <td>{color_val(m.get('Calmar Ratio', 0), fmt='+.4f')}</td>
             <td>{m.get('Win Rate', 0):.4f}</td>
             <td>{m.get('Turnover', 0):.4f}</td>
           </tr>"""
-        html += """
+        return f"""
+  <div class="section">
+    <div class="section-title">{title}</div>
+    <div class="table-wrap">
+      <table class="comp-table">
+        <thead>
+          <tr>
+            <th>Strategy</th><th>Total Return %</th><th>CAGR</th>
+            <th>Sharpe</th><th>MDD</th>
+            <th>Volatility</th><th>Calmar</th><th>Win Rate</th><th>Turnover</th>
+          </tr>
+        </thead>
+        <tbody>{rows}
         </tbody>
       </table>
     </div>
   </div>"""
+
+    if metrics_data:
+        html += _metrics_table(metrics_data, "📋 US Dataset — Selected Model vs Baselines")
+
+    if metrics_vn30:
+        html += _metrics_table(metrics_vn30, "🇻🇳 VN30 Dataset — Selected Model vs Baselines")
 
     # ── Section 6: Observations ──
     html += f"""
@@ -450,22 +419,23 @@ def generate_html(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", type=str,
-                        default="outputs/reports/evaluation_report.html")
+    parser.add_argument("--output",      type=str, default="outputs/reports/evaluation_report.html")
     parser.add_argument("--fold-eval",   type=str, default="outputs/reports/fold_evaluation.json")
     parser.add_argument("--metrics",     type=str, default="outputs/reports/metrics_summary.json")
+    parser.add_argument("--metrics-vn30",type=str, default="outputs/reports/metrics_summary_vn30.json")
     parser.add_argument("--wf-summary",  type=str, default="outputs/reports/walk_forward_summary.json")
     args = parser.parse_args()
 
     fold_data    = load_json(args.fold_eval)
     metrics_data = load_json(args.metrics)
+    metrics_vn30 = load_json(args.metrics_vn30)
     wf_data      = load_json(args.wf_summary)
 
     if fold_data is None:
         print(f"[ERROR] Could not load {args.fold_eval}. Run evaluate_all_folds.py first.")
         return
 
-    html = generate_html(fold_data, metrics_data, wf_data)
+    html = generate_html(fold_data, metrics_data, wf_data, metrics_vn30)
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)

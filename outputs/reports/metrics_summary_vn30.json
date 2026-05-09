@@ -1,0 +1,54 @@
+{
+  "PPO Actor-Critic": {
+    "Total Return %": 10.403918657916854,
+    "CAGR": 0.2189025255023922,
+    "Sharpe Ratio": 1.2839189020447797,
+    "Sortino Ratio": 2.0375683122882604,
+    "Max Drawdown": -0.14463337779127128,
+    "Volatility": 0.16484224222672356,
+    "Calmar Ratio": 1.5134993653975433,
+    "Win Rate": 0.5952380952380952,
+    "Final Portfolio Value": 1104039.1865791685,
+    "Turnover": 0.016335484409143054,
+    "Avg Holding Period": 61.21639087334651
+  },
+  "BuyHold EqualWeight": {
+    "Total Return %": 12.092942055754419,
+    "CAGR": 0.2564827658714717,
+    "Sharpe Ratio": 1.313947978585775,
+    "Sortino Ratio": 2.091832146007436,
+    "Max Drawdown": -0.16608248798355374,
+    "Volatility": 0.1872126337780524,
+    "Calmar Ratio": 1.544309511408992,
+    "Win Rate": 0.5873015873015873,
+    "Final Portfolio Value": 1120929.420557544,
+    "Turnover": 0.0,
+    "Avg Holding Period": 100000000.0
+  },
+  "Markowitz": {
+    "Total Return %": 13.591318840186783,
+    "CAGR": 0.2902987715852974,
+    "Sharpe Ratio": 1.362976570124819,
+    "Sortino Ratio": 2.32374195045941,
+    "Max Drawdown": -0.16608248798355374,
+    "Volatility": 0.20205724696427674,
+    "Calmar Ratio": 1.747919212373818,
+    "Win Rate": 0.5634920634920635,
+    "Final Portfolio Value": 1135913.1884018679,
+    "Turnover": 0.02644723672015843,
+    "Avg Holding Period": 37.511031130677
+  },
+  "Random Allocation": {
+    "Total Return %": 17.5326639774128,
+    "CAGR": 0.3813927101627428,
+    "Sharpe Ratio": 1.7086273899416422,
+    "Sortino Ratio": 2.9149891260518097,
+    "Max Drawdown": -0.1312901907860704,
+    "Volatility": 0.20103784255207693,
+    "Calmar Ratio": 2.904959676570199,
+    "Win Rate": 0.5793650793650794,
+    "Final Portfolio Value": 1175326.639774128,
+    "Turnover": 0.9192774744997984,
+    "Avg Holding Period": 1.079177407123103
+  }
+}

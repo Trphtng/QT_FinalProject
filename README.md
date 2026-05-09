@@ -412,15 +412,12 @@ pip install vnstock
 | Chỉ số | Ý nghĩa | Mục tiêu |
 |---|---|---|
 | **Total Return %** | Tổng lợi nhuận | Càng cao càng tốt |
-| **CAGR** | Tăng trưởng kép hàng năm | > 10% |
 | **Sharpe Ratio** | Lợi nhuận / rủi ro | > 1.0 |
-| **Sortino Ratio** | Lợi nhuận / downside risk | > 1.5 |
 | **Max Drawdown** | Sụt giảm tối đa từ đỉnh | < -15% |
 | **Volatility** | Biến động hàng năm | Càng thấp càng tốt |
 | **Calmar Ratio** | CAGR / |MDD| | > 0.5 |
-| **Win Rate** | Tỷ lệ ngày lợi nhuận | > 50% |
 | **Turnover** | Tần suất giao dịch | < 2% |
-| **Avg Holding Period** | Số ngày giữ trung bình | Phụ thuộc chiến lược |
+
 
 ---
 

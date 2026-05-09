@@ -12,7 +12,6 @@ import torch
 from torch import nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.utils.tensorboard import SummaryWriter
 
 from src.env.portfolio_env import PortfolioEnv
 from src.models.actor_critic import ActorCriticNetwork
@@ -95,7 +94,6 @@ class PPOTrainer:
             self.amp_device_type,
             enabled=bool(cfg.get("use_mixed_precision", True) and device.type == "cuda"),
         )
-        self.writer = SummaryWriter(log_dir=cfg["tensorboard_dir"])
         self.checkpoint_path = Path(cfg["checkpoint_path"])
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         self.best_score = -np.inf
@@ -218,33 +216,6 @@ class PPOTrainer:
                 rollout_diag["mean_penalty_variance"],
             )
 
-            self.writer.add_scalar("train/reward", self.history["train_reward"][-1], epoch)
-            self.writer.add_scalar("train/reward_raw", self.history["train_reward_raw"][-1], epoch)
-            self.writer.add_scalar("train/actor_loss", train_stats["actor_loss"], epoch)
-            self.writer.add_scalar("train/critic_loss", train_stats["critic_loss"], epoch)
-            self.writer.add_scalar("train/entropy", train_stats["entropy"], epoch)
-            self.writer.add_scalar("train/entropy_coef", entropy_coef, epoch)
-            self.writer.add_scalar("val/sharpe", val_sharpe, epoch)
-            self.writer.add_scalar("val/max_drawdown", val_max_drawdown, epoch)
-            self.writer.add_scalar("val/score", score, epoch)
-            self.writer.add_scalar("val/final_value", val_stats["Final Portfolio Value"], epoch)
-            self.writer.add_scalar("train/lr", current_lr, epoch)
-            self.writer.add_scalar("train/mean_gross_return", rollout_diag["mean_gross_return"], epoch)
-            self.writer.add_scalar("train/mean_net_return", rollout_diag["mean_net_return"], epoch)
-            self.writer.add_scalar("train/mean_turnover", rollout_diag["mean_turnover"], epoch)
-            self.writer.add_scalar("train/mean_drawdown", rollout_diag["mean_drawdown"], epoch)
-            self.writer.add_scalar("train/mean_variance", rollout_diag["mean_variance"], epoch)
-            self.writer.add_scalar("train/mean_cost", rollout_diag["mean_cost"], epoch)
-            self.writer.add_scalar("train/mean_reward_log_term", rollout_diag["mean_reward_log_term"], epoch)
-            self.writer.add_scalar("train/mean_reward_return_bonus", rollout_diag["mean_reward_return_bonus"], epoch)
-            self.writer.add_scalar("train/mean_reward_sharpe_bonus", rollout_diag["mean_reward_sharpe_bonus"], epoch)
-            self.writer.add_scalar("train/mean_reward_momentum_bonus", rollout_diag["mean_reward_momentum_bonus"], epoch)
-            self.writer.add_scalar("train/mean_penalty_turnover", rollout_diag["mean_penalty_turnover"], epoch)
-            self.writer.add_scalar("train/mean_penalty_drawdown", rollout_diag["mean_penalty_drawdown"], epoch)
-            self.writer.add_scalar("train/mean_penalty_variance", rollout_diag["mean_penalty_variance"], epoch)
-            self.writer.add_scalar("train/mean_cash_weight", rollout_diag["mean_cash_weight"], epoch)
-            self.writer.add_scalar("train/mean_asset_weight_std", rollout_diag["mean_asset_weight_std"], epoch)
-
             if score > self.best_score:
                 self.best_score = score
                 patience = 0
@@ -257,7 +228,6 @@ class PPOTrainer:
                 LOGGER.info("Early stopping triggered at epoch %s", epoch + 1)
                 break
 
-        self.writer.flush()
         history_path = self.checkpoint_path.parent / "training_history.json"
         history_path.write_text(json.dumps(self.history, indent=2), encoding="utf-8")
         return self.history

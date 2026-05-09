@@ -130,7 +130,6 @@ training:
   early_stopping_patience: 30
   checkpoint_path: "outputs/models/best_model_vn30.pt"
   resume_from: null
-  tensorboard_dir: "outputs/tensorboard_vn30"
   log_interval: 1
 
 evaluation:

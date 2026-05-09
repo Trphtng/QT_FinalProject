@@ -121,7 +121,6 @@ def main() -> None:
         if use_walk_forward:
             fold_ckpt = base_ckpt.parent / f"{base_ckpt.stem}_fold{fold_idx + 1}{base_ckpt.suffix}"
             fold_training_cfg["checkpoint_path"] = str(fold_ckpt)
-            fold_training_cfg["tensorboard_dir"] = f"{cfg['training']['tensorboard_dir']}/fold_{fold_idx + 1}"
             fold_training_cfg["resume_from"] = None
 
         trainer = PPOTrainer(model=model, train_env=train_env, val_env=val_env, cfg=fold_training_cfg, device=device)

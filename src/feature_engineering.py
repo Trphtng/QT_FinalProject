@@ -193,6 +193,21 @@ def engineer_features(raw_df: pd.DataFrame, feature_cfg: dict, data_cfg: dict) -
         group["TrendSlope20"] = group["SMA20"].diff(5) / group["SMA20"].shift(5).replace(0.0, np.nan)
         local_peak = group["Close"].rolling(60, min_periods=1).max()
         group["DrawdownLocalPeak"] = 1.0 - group["Close"] / local_peak.replace(0.0, np.nan)
+        
+        # ── TÍNH NĂNG NÂNG CAO (ADVANCED FEATURES) ─────────────────────────────
+        group["VolumeChange"] = group["Volume"] / group["Volume"].rolling(20).mean().replace(0.0, np.nan)
+        group["BBWidth"] = (group["BBUpper"] - group["BBLower"]) / group["BBMiddle"].replace(0.0, np.nan)
+        
+        low14 = group["Low"].rolling(14).min()
+        high14 = group["High"].rolling(14).max()
+        group["StochasticK"] = (group["Close"] - low14) / (high14 - low14).replace(0.0, np.nan) * 100.0
+        group["StochasticK"] = group["StochasticK"].fillna(50.0)
+        group["StochasticD"] = group["StochasticK"].rolling(3).mean().fillna(50.0)
+        
+        sma50 = group["Close"].rolling(50).mean()
+        sma100 = group["Close"].rolling(100).mean()
+        group["PriceToSMA50"] = group["Close"] / sma50.replace(0.0, np.nan)
+        group["PriceToSMA100"] = group["Close"] / sma100.replace(0.0, np.nan)
 
         if market_regime_cfg.get("enabled", True):
             fast = int(market_regime_cfg.get("ma_fast", 20))

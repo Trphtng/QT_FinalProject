@@ -349,8 +349,6 @@ def main() -> None:
         int(cfg["evaluation"]["rolling_sharpe_window"]),
         str(figure_dir / "rolling_sharpe.png"),
     )
-    if comparison_df is not None:
-        plot_baseline_comparison(comparison_df, str(figure_dir / "baseline_comparison.png"))
 
     LOGGER.info("Evaluation completed using checkpoint %s", checkpoint_path)
     LOGGER.info("Metrics saved to %s", report_path)

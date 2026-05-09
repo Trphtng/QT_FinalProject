@@ -67,6 +67,12 @@ features:
     - TrendSlope20
     - RollingCorrMarket20
     - DrawdownLocalPeak
+    - VolumeChange
+    - BBWidth
+    - StochasticK
+    - StochasticD
+    - PriceToSMA50
+    - PriceToSMA100
   normalize_features: true
   covariance_window: 20
   market_regime:
@@ -136,7 +142,6 @@ training:
   early_stopping_patience: 30
   checkpoint_path: "outputs/models/best_model.pt"
   resume_from: null
-  tensorboard_dir: "outputs/tensorboard"
   log_interval: 1
 
 evaluation:
